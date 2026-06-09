@@ -8,6 +8,12 @@ A native **Visual Studio 2026 extension** that launches the real `claude` CLI an
 
 If you ever find yourself adding an LLM API call, an agent loop, or a tool the CLI already provides, stop — that's out of scope (that's the failed "Approach B"; see `build-plan.md` §1).
 
+## Working agreement (how we collaborate here)
+
+- **Build in chunks, then teach.** Run free on a defined chunk of work (a phase or a well-scoped task), then — before moving on — explain everything the user needs to know/learn about what was built. The user is shipping this *and* learning the domain (VS SDK, the Claude Code IDE protocol) along the way, so keep code and decisions explainable and don't bury rationale.
+- **Ask before design decisions with tradeoffs.** When a fork has real tradeoffs (not a choice with an obvious default), surface it with a recommendation and let the user decide. Decisions already locked in `build-plan.md` §8 don't need re-asking.
+- **Ask when an instruction is unclear** rather than guessing and running.
+
 ## Architecture (where things live)
 
 - `src/Protocol/` — lockfile writer, WS server, MCP handshake, JSON-RPC framing.

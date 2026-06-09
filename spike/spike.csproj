@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 0 protocol spike. Standalone net8.0 console — NOT the extension.
+    Purpose: prove the undocumented Claude Code IDE-integration contract end-to-end
+    before touching the VS SDK. See build-plan.md §7.
+
+    The real extension will be an in-proc net48 VSIX, but HttpListener +
+    System.Net.WebSockets behave the same here, so this de-risks the protocol cheaply.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>spike</AssemblyName>
+    <RootNamespace>ClaudeCodeVs.Spike</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

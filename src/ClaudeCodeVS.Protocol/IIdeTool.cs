@@ -13,6 +13,9 @@ public interface IIdeTool
 {
     string Name { get; }
 
+    /// <summary>Human/model-facing description advertised in tools/list — helps the model pick the tool.</summary>
+    string Description { get; }
+
     /// <summary>The JSON Schema advertised in tools/list. Becomes the mcp__ide__* tool the model sees.</summary>
     JToken Schema { get; }
 

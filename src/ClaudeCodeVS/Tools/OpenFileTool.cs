@@ -18,6 +18,7 @@ namespace ClaudeCodeVs.Tools;
 internal sealed class OpenFileTool : IIdeTool
 {
     public string Name => "openFile";
+    public string Description => "Open a file in the Visual Studio editor and optionally select/reveal a line range.";
 
     public JToken Schema => new JObject
     {

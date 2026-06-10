@@ -33,14 +33,16 @@ internal sealed class LambdaTool : IIdeTool
 {
     private readonly Func<JToken, CancellationToken, Task<object>> _fn;
 
-    public LambdaTool(string name, JToken schema, Func<JToken, CancellationToken, Task<object>> fn)
+    public LambdaTool(string name, string description, JToken schema, Func<JToken, CancellationToken, Task<object>> fn)
     {
         Name = name;
+        Description = description;
         Schema = schema;
         _fn = fn;
     }
 
     public string Name { get; }
+    public string Description { get; }
     public JToken Schema { get; }
     public Task<object> InvokeAsync(JToken arguments, CancellationToken ct) => _fn(arguments, ct);
 }
@@ -54,33 +56,12 @@ internal static class ParityTools
 {
     public static IEnumerable<IIdeTool> All()
     {
-        yield return new LambdaTool("getOpenEditors", Schemas.Empty(),
-            (a, ct) => Task.FromResult<object>(new JObject { ["editors"] = new JArray() }));
-
-        yield return new LambdaTool("getWorkspaceFolders", Schemas.Empty(),
-            (a, ct) => Task.FromResult<object>(new JObject { ["folders"] = new JArray() }));
-
-        yield return new LambdaTool("checkDocumentDirty", Schemas.WithFilePath(),
-            (a, ct) => Task.FromResult<object>(new JObject { ["isDirty"] = false }));
-
-        yield return new LambdaTool("saveDocument", Schemas.WithFilePath(),
-            (a, ct) => Task.FromResult<object>("FILE_SAVED"));
-
-        // Core diff-flow no-ops (the CLI calls these around openDiff). Plain strings -> verbatim.
-        yield return new LambdaTool("close_tab",
-            new JObject
-            {
-                ["type"] = "object",
-                ["properties"] = new JObject { ["tab_name"] = new JObject { ["type"] = "string" } },
-                ["required"] = new JArray("tab_name"),
-            },
-            (a, ct) => Task.FromResult<object>("TAB_CLOSED"));
-
-        yield return new LambdaTool("closeAllDiffTabs", Schemas.Empty(),
-            (a, ct) => Task.FromResult<object>("CLOSED_ALL_DIFF_TABS"));
+        // getOpenEditors / getWorkspaceFolders / checkDocumentDirty / saveDocument (WorkspaceTools.cs)
+        // and close_tab / closeAllDiffTabs (CloseTabTools.cs) are now real, registered in BridgeHost.
 
         // No VS equivalent (Jupyter kernel execution) -> honest MCP error.
         yield return new LambdaTool("executeCode",
+            "Execute code in a Jupyter kernel. Not supported in Visual Studio.",
             new JObject
             {
                 ["type"] = "object",

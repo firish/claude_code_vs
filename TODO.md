@@ -1,9 +1,27 @@
-# Phase 1 — follow-ups (post first live smoke test)
+# ClaudeCodeVS — status & follow-ups
 
-Status: **Phase 1 works.** The VSIX loads in VS 2026, the bridge auto-starts (lockfile + localhost
-WS server), the CLI connects, and the **native diff + Accept/Reject InfoBar + write-back round-trips
-end-to-end** against the real CLI (verified 2026-06-09, CLI 2.1.126). Selection / diagnostics / openFile
-are implemented but not yet exercised live.
+Status (2026-06-10, CLI 2.1.172): **Phase 1 + the valuable parts of Phase 2 are done and proven.**
+Working end-to-end against the real CLI in VS 2026:
+- Native **diff + Accept/Reject + write-back** (RDT-aware: updates an open editor buffer in place, no
+  reload prompt).
+- **Diagnostics** — the #15942 loop verified: Claude detects a real CS0029, opens a diff to fix it,
+  accept, re-queries clean. (Error List backend; needs a *loaded project*, not a loose file.)
+- **Selection context** via the `selection_changed` push; **one-click Launch Claude Code** command;
+  `close_tab`/`closeAllDiffTabs` real; lockfile lifecycle + reap + delete-if-server-faults.
+
+**Ceiling reached:** the CLI exposes only `getDiagnostics` + `executeCode` to the model and drives
+diff/openFile/selection internally; the awareness tools are dormant by design (see the IMPORTANT
+section below). So further agent capability isn't available — remaining work is **UX (Phase 3)** and
+robustness, not new tools.
+
+Phase 2 deferred/optional: Roslyn-precise diagnostic spans, C++ diagnostics test, reconnect/multi-
+window hardening, theme-aware diff chrome.
+
+---
+
+## Phase 1 history (kept for reference)
+
+The original Phase-1 smoke test (2026-06-09, CLI 2.1.126) proved the diff round-trip end-to-end.
 
 Connect today (no Launch command yet): set env vars to the bridge port (from the "Claude Code" output
 pane, `Bridge ready on port N`) and run the CLI **inside the target repo**:
@@ -90,6 +108,40 @@ diff, then type the reason in the terminal when Claude asks.
 - **Don't run command-line builds of the VSIX while iterating in the IDE** — they desync VS's
   up-to-date check so F5 skips build+deploy. Pick one path (IDE F5 *or* CLI) per session.
 - The bridge **picks a new free port each launch**; the env-var connect value changes accordingly.
+
+## IMPORTANT: which IDE tools the CLI actually uses (verified 2026-06-10, CLI 2.1.172)
+
+Live frame logs show the CLI only ever *calls* a SUBSET of the advertised tools. Its IDE awareness is:
+- **`selection_changed`** (notification we push) → the active file + selection. This is how Claude
+  knows the "active/selected file" — NOT via getCurrentSelection.
+- **`getDiagnostics`** → errors/warnings (called constantly).
+- **`openDiff` / `openFile` / `close_tab` / `closeAllDiffTabs`** → the diff & navigation flow.
+
+Tools the current CLI NEVER calls: `getOpenEditors`, `checkDocumentDirty`, `saveDocument`,
+`getWorkspaceFolders`, `getCurrentSelection`, `getLatestSelection`. They're implemented and correct
+(full-parity), but **dormant**. Keep them (a future CLI may use them, and the official VS Code
+extension advertises all 12 too), but don't expect "what files are open?" / "is this unsaved?" to work
+via Claude.
+
+**CONFIRMED mechanism (CLI 2.1.172, via Claude's own tool introspection):** we advertise all 12 in
+tools/list (visible in the handshake log), but the CLI only exposes a fixed subset to the *model*. The
+model-callable IDE tools are exactly **`getDiagnostics` + `executeCode`**. `openDiff` / `openFile` /
+`close_tab` / `closeAllDiffTabs` / `selection_changed` are driven by the CLI internally (not model
+choices). So advertising more tools or improving descriptions cannot make the model use them — the CLI
+controls the model's tool surface, not us. This caps the agent-capability ceiling of Approach C at:
+**diff flow + selection context + diagnostics** — all of which now work.
+
+**Consequence for the value prop:** the real, CLI-exercised surface is **selection context +
+diagnostics + the diff flow**. That's where to invest. Diagnostics is the headline (#15942), so making
+getDiagnostics return real, precise errors matters most.
+
+### getDiagnostics needs a loaded project
+A loose `.cs` in an Open-Folder isn't analyzed by Roslyn, so the Error List stays empty and
+getDiagnostics returns `[]` (observed with `test2.cs`). It only populates for files in a **loaded
+project**. `diag-test/` (a minimal console project with a deliberate CS0029) exists to verify this:
+open it as a project in the experimental VS, confirm the Error List shows the error, then ask Claude.
+If the Error List shows it but getDiagnostics still returns `[]`, that's a real bug in ErrorListReader
+to chase (the IVsTaskList read). This is the key Phase-2 thing left to validate.
 
 ## Known smaller items
 - Diagnostics currently come from the **Error List** (unified C#/C++). Roslyn-precise C# ranges are a

@@ -56,7 +56,18 @@ internal sealed class BridgeHost : IDisposable
         // Let the selection tracker push selection_changed over this server.
         Editor.SelectionService.Attach(_server, ThreadHelper.JoinableTaskFactory);
 
-        _ = Task.Run(() => _server.RunAsync(_cts.Token), _cts.Token);
+        // Run the accept loop in the background. If it ever faults (not a normal shutdown), delete the
+        // lockfile so we don't keep advertising a dead bridge that blocks reconnection (issue #5043).
+        _ = Task.Run(async () =>
+        {
+            try { await _server.RunAsync(_cts.Token); }
+            catch (OperationCanceledException) { /* normal shutdown */ }
+            catch (Exception e)
+            {
+                Log.Error($"WS server stopped unexpectedly: {e.Message}");
+                _lockfile?.Delete();
+            }
+        }, _cts.Token);
 
         // Keep the lockfile's workspaceFolders in sync as solutions/folders open, so /ide matches cwd.
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
@@ -77,6 +88,15 @@ internal sealed class BridgeHost : IDisposable
         yield return new GetCurrentSelectionTool();
         yield return new GetLatestSelectionTool();
         yield return new GetDiagnosticsTool();
+        // Phase 2 awareness tools (RDT / solution backed).
+        yield return new GetOpenEditorsTool();
+        yield return new GetWorkspaceFoldersTool();
+        yield return new CheckDocumentDirtyTool();
+        yield return new SaveDocumentTool();
+        // Phase 2 diff-tab lifecycle (real close).
+        yield return new CloseTabTool();
+        yield return new CloseAllDiffTabsTool();
+        // Remaining stub (executeCode -> MCP error).
         foreach (var stub in ParityTools.All())
             yield return stub;
     }

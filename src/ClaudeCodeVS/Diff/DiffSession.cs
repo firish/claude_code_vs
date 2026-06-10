@@ -83,8 +83,16 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
             throw new InvalidOperationException("OpenComparisonWindow2 returned no window frame");
 
         var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, frame);
+        DiffRegistry.Register(tabName, session);
         session.AttachInfoBar();
         frame.Show();
+    }
+
+    /// <summary>Close this diff in response to the CLI's close_tab/closeAllDiffTabs (reject if pending).</summary>
+    public void CloseExternally()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        Resolve(false);
     }
 
     private void AttachInfoBar()
@@ -136,15 +144,21 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         ThreadHelper.ThrowIfNotOnUIThread();
         if (_resolved) return;
         _resolved = true;
+        DiffRegistry.Unregister(_tabName);
 
         if (accepted)
         {
             try
             {
-                // Phase 1: write straight to disk. (Phase 2 upgrade: update the open editor buffer
-                // via the RDT so an already-open document doesn't prompt a reload.)
-                File.WriteAllText(_newPath, _contents);
-                Log.Info($"openDiff: wrote {_newPath}");
+                // If the file is open in an editor, update its buffer in place and save (no reload
+                // prompt); otherwise write straight to disk.
+                if (ClaudeCodeVs.Editor.RunningDocuments.TryReplaceOpenDocument(_newPath, _contents))
+                    Log.Info($"openDiff: updated open editor buffer for {_newPath}");
+                else
+                {
+                    File.WriteAllText(_newPath, _contents);
+                    Log.Info($"openDiff: wrote {_newPath}");
+                }
             }
             catch (Exception e)
             {

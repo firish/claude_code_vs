@@ -13,6 +13,7 @@ namespace ClaudeCodeVs.Tools;
 internal sealed class GetCurrentSelectionTool : IIdeTool
 {
     public string Name => "getCurrentSelection";
+    public string Description => "Get the current text selection in the active Visual Studio editor.";
     public JToken Schema => Schemas.Empty();
 
     public Task<object> InvokeAsync(JToken arguments, CancellationToken ct)
@@ -23,6 +24,7 @@ internal sealed class GetCurrentSelectionTool : IIdeTool
 internal sealed class GetLatestSelectionTool : IIdeTool
 {
     public string Name => "getLatestSelection";
+    public string Description => "Get the most recent non-empty text selection from the Visual Studio editor.";
     public JToken Schema => Schemas.Empty();
 
     public Task<object> InvokeAsync(JToken arguments, CancellationToken ct)

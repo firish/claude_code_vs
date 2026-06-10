@@ -84,7 +84,7 @@ public sealed class McpServer
             arr.Add(new JObject
             {
                 ["name"] = tool.Name,
-                ["description"] = $"{tool.Name} (VS bridge)",
+                ["description"] = tool.Description,
                 ["inputSchema"] = tool.Schema,
             });
         }

@@ -23,6 +23,7 @@ internal sealed class OpenDiffTool : IIdeTool
     public OpenDiffTool(DiffDecisions decisions) => _decisions = decisions;
 
     public string Name => "openDiff";
+    public string Description => "Show a diff between an on-disk file and proposed new contents in Visual Studio's diff viewer, and wait for the user to accept or reject.";
 
     public JToken Schema => new JObject
     {

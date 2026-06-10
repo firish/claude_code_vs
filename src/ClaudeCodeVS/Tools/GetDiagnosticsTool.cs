@@ -16,6 +16,7 @@ namespace ClaudeCodeVs.Tools;
 internal sealed class GetDiagnosticsTool : IIdeTool
 {
     public string Name => "getDiagnostics";
+    public string Description => "Get compiler/build diagnostics (errors and warnings) from Visual Studio's Error List, optionally filtered to a single file URI. Returns [{uri, diagnostics:[...]}].";
 
     public JToken Schema => new JObject
     {

@@ -1,0 +1,163 @@
+using System;
+using System.IO;
+using ClaudeCodeVs.Protocol;
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Imaging;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+
+namespace ClaudeCodeVs.Diff;
+
+/// <summary>
+/// Renders one proposed edit in VS's native diff viewer (IVsDifferenceService) with an Accept/Reject
+/// InfoBar across the top, and completes the parked <see cref="DiffDecisions"/> entry when the user
+/// chooses (build-plan §5). The native diff window is a read-only *viewer* with no buttons of its
+/// own, so the InfoBar is how the user acts. All members run on the UI thread.
+/// </summary>
+internal sealed class DiffSession : IVsInfoBarUIEvents
+{
+    private const string Accept = "Accept";
+    private const string Reject = "Reject";
+
+    private readonly DiffDecisions _decisions;
+    private readonly string _tabName;
+    private readonly string _newPath;
+    private readonly string _contents;
+    private readonly string _tempPath;
+    private readonly string? _ownedLeftTemp; // an empty left file we created for "new file" diffs
+    private readonly IVsWindowFrame _frame;
+
+    private IVsInfoBarUIElement? _infoBar;
+    private uint _cookie;
+    private bool _resolved;
+
+    private DiffSession(DiffDecisions decisions, string tabName, string newPath, string contents,
+                        string tempPath, string? ownedLeftTemp, IVsWindowFrame frame)
+    {
+        _decisions = decisions;
+        _tabName = tabName;
+        _newPath = newPath;
+        _contents = contents;
+        _tempPath = tempPath;
+        _ownedLeftTemp = ownedLeftTemp;
+        _frame = frame;
+    }
+
+    /// <summary>
+    /// Open the diff window + InfoBar. Must be called on the UI thread. The decision is delivered
+    /// asynchronously through <paramref name="decisions"/> when the user clicks Accept/Reject.
+    /// </summary>
+    public static void Open(string oldPath, string newPath, string contents, string tabName,
+                            string tempPath, DiffDecisions decisions)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var diff = (IVsDifferenceService?)ServiceProvider.GlobalProvider.GetService(typeof(SVsDifferenceService));
+        if (diff is null)
+            throw new InvalidOperationException("SVsDifferenceService unavailable");
+
+        // The left (baseline) is the file on disk. For a brand-new file there's nothing to compare
+        // against, so synthesize an empty left side.
+        string? ownedLeftTemp = null;
+        string leftMoniker = oldPath;
+        if (string.IsNullOrEmpty(oldPath) || !File.Exists(oldPath))
+        {
+            ownedLeftTemp = Path.Combine(Path.GetTempPath(), $"claudediff_empty_{Guid.NewGuid():N}.tmp");
+            File.WriteAllText(ownedLeftTemp, string.Empty);
+            leftMoniker = ownedLeftTemp;
+        }
+
+        string fileName = Path.GetFileName(string.IsNullOrEmpty(newPath) ? leftMoniker : newPath);
+        var frame = diff.OpenComparisonWindow2(
+            leftFileMoniker: leftMoniker,
+            rightFileMoniker: tempPath,
+            caption: $"Claude Code: {fileName}",
+            Tooltip: newPath,
+            leftLabel: $"{fileName} (current)",
+            rightLabel: $"{fileName} (Claude proposal)",
+            inlineLabel: null,
+            roles: null,
+            grfDiffOptions: 0);
+
+        if (frame is null)
+            throw new InvalidOperationException("OpenComparisonWindow2 returned no window frame");
+
+        var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, frame);
+        session.AttachInfoBar();
+        frame.Show();
+    }
+
+    private void AttachInfoBar()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (ErrorHandler.Failed(_frame.GetProperty((int)__VSFPROPID7.VSFPROPID_InfoBarHost, out var hostObj))
+            || hostObj is not IVsInfoBarHost host)
+        {
+            Log.Warn("diff window has no InfoBar host; accept/reject UI unavailable");
+            return;
+        }
+
+        var factory = (IVsInfoBarUIFactory?)ServiceProvider.GlobalProvider.GetService(typeof(SVsInfoBarUIFactory));
+        if (factory is null)
+        {
+            Log.Warn("SVsInfoBarUIFactory unavailable; accept/reject UI unavailable");
+            return;
+        }
+
+        var model = new InfoBarModel(
+            new[] { new InfoBarTextSpan($"Claude Code proposes changes to {Path.GetFileName(_newPath)}. ") },
+            new[] { new InfoBarHyperlink(Accept), new InfoBarHyperlink(Reject) },
+            KnownMonikers.StatusInformation,
+            isCloseButtonVisible: true);
+
+        _infoBar = factory.CreateInfoBar(model);
+        _infoBar.Advise(this, out _cookie);
+        host.AddInfoBar(_infoBar);
+    }
+
+    public void OnActionItemClicked(IVsInfoBarUIElement infoBarUIElement, IVsInfoBarActionItem actionItem)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread(); // VS raises this event on the UI thread
+        Resolve(string.Equals(actionItem.Text, Accept, StringComparison.Ordinal));
+    }
+
+    public void OnClosed(IVsInfoBarUIElement infoBarUIElement)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread(); // VS raises this event on the UI thread
+        // The user dismissed the InfoBar without choosing → treat as reject so the CLI unblocks.
+        if (_infoBar is not null)
+            _infoBar.Unadvise(_cookie);
+        Resolve(false);
+    }
+
+    private void Resolve(bool accepted)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_resolved) return;
+        _resolved = true;
+
+        if (accepted)
+        {
+            try
+            {
+                // Phase 1: write straight to disk. (Phase 2 upgrade: update the open editor buffer
+                // via the RDT so an already-open document doesn't prompt a reload.)
+                File.WriteAllText(_newPath, _contents);
+                Log.Info($"openDiff: wrote {_newPath}");
+            }
+            catch (Exception e)
+            {
+                Log.Error($"openDiff write-back to {_newPath} failed: {e.Message}");
+                accepted = false;
+            }
+        }
+
+        try { _frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave); } catch { /* already gone */ }
+        try { File.Delete(_tempPath); } catch { /* best effort */ }
+        if (_ownedLeftTemp is not null)
+            try { File.Delete(_ownedLeftTemp); } catch { /* best effort */ }
+
+        _decisions.Resolve(_tabName, accepted);
+    }
+}

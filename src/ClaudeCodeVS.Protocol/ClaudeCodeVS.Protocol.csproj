@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Protocol core for the Claude Code <-> Visual Studio bridge.
+
+    Deliberately PURE BCL (no VS SDK reference): lockfile, localhost WebSocket server, MCP/JSON-RPC
+    framing, the IIdeTool seam, and the deferred-diff coordinator. Because it touches no VS service,
+    it compiles and unit-tests on any machine with the net48 targeting pack — which is how we build
+    and verify Phase 1's plumbing before Visual Studio 2026 is installed.
+
+    Runtime is net48 to match the in-proc VSIX (build-plan.md §8). The VSIX project references this
+    library; its DLL is carried into the .vsix automatically as a project reference.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ClaudeCodeVS.Protocol</AssemblyName>
+    <RootNamespace>ClaudeCodeVs.Protocol</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Newtonsoft.Json, NOT System.Text.Json. Visual Studio ships Newtonsoft and provides binding
+      redirects for it to every in-proc extension, so it resolves at runtime with zero shipped
+      dependencies. System.Text.Json (8.0.x here) failed to load in-proc: its version-specific
+      assembly closure isn't on devenv's probing path, so the package failed with
+      "Could not load file or assembly ... or one of its dependencies." This is the canonical reason
+      VS extensions use Newtonsoft.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>

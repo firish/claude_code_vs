@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ClaudeCodeVS.Protocol/ClaudeCodeVS.Protocol.csproj" />
+    <Project Path="src/ClaudeCodeVS/ClaudeCodeVS.csproj" Id="209981d1-0325-4fad-b5f4-3d8662dbfef9" />
+  </Folder>
+</Solution>

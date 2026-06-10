@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Command table for the "Launch Claude Code" command. Adds a button to the Tools menu that calls
+  BridgeHost.LaunchClaudeAsync (env vars + working dir = workspace, so the CLI auto-connects).
+-->
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidClaudeCodeVsPackage">
+    <Groups>
+      <Group guid="guidClaudeCmdSet" id="ClaudeMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidClaudeCmdSet" id="LaunchClaudeId" priority="0x0100" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="ClaudeMenuGroup" />
+        <Strings>
+          <ButtonText>Launch Claude Code</ButtonText>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidClaudeCodeVsPackage" value="{d9032717-8a83-4ab5-9b63-2fe9d9a78481}" />
+    <GuidSymbol name="guidClaudeCmdSet" value="{9495bbbb-756d-4dc4-807d-1408d50e7d33}">
+      <IDSymbol name="ClaudeMenuGroup" value="0x1020" />
+      <IDSymbol name="LaunchClaudeId" value="0x0100" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

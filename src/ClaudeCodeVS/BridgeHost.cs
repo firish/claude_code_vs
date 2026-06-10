@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using ClaudeCodeVs.Protocol;
@@ -27,6 +28,9 @@ internal sealed class BridgeHost : IDisposable
     private WorkspaceWatcher? _watcher;
 
     public BridgeHost(AsyncPackage package) => _package = package;
+
+    /// <summary>The port the bridge is listening on, or null if not started yet.</summary>
+    public int? Port => _lockfile?.Port;
 
     public async Task StartAsync(CancellationToken ct)
     {
@@ -80,6 +84,13 @@ internal sealed class BridgeHost : IDisposable
     /// <summary>Best-effort workspace root for the lockfile: the open solution's directory, else none.</summary>
     private async Task<IReadOnlyList<string>> GetWorkspaceFoldersAsync()
     {
+        var root = await GetWorkspaceRootAsync();
+        return root is null ? Array.Empty<string>() : new[] { root };
+    }
+
+    /// <summary>The open solution/folder root, or null. Must be awaited on any thread (switches to UI).</summary>
+    private async Task<string?> GetWorkspaceRootAsync()
+    {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         try
         {
@@ -88,14 +99,59 @@ internal sealed class BridgeHost : IDisposable
                 sol.GetSolutionInfo(out string dir, out _, out _) == VSConstants.S_OK &&
                 !string.IsNullOrEmpty(dir))
             {
-                return new[] { dir.TrimEnd('\\') };
+                return dir.TrimEnd('\\');
             }
         }
         catch (Exception e)
         {
             Log.Warn($"workspace lookup failed: {e.Message}");
         }
-        return Array.Empty<string>();
+        return null;
+    }
+
+    /// <summary>
+    /// T1 — launch the CLI in a terminal pre-wired to this bridge: a new console with
+    /// ENABLE_IDE_INTEGRATION + CLAUDE_CODE_SSE_PORT set and the working directory pinned to the
+    /// workspace root, so the CLI auto-connects (no /ide) and writes files into the right repo (fixes B2).
+    /// </summary>
+    public async Task LaunchClaudeAsync()
+    {
+        if (_lockfile is null)
+        {
+            Log.Warn("Launch Claude Code: bridge isn't running yet.");
+            return;
+        }
+
+        string? workspace = await GetWorkspaceRootAsync();
+
+        // Launch in DEFAULT permission mode. We tried --permission-mode acceptEdits to drop the CLI's
+        // terminal edit-prompt, but verified it makes the CLI auto-apply edits and NOT call openDiff at
+        // all — i.e. it kills our diff (the whole point). In the interactive-terminal model the diff and
+        // the terminal prompt are inseparable: openDiff only fires in review-required (default) mode,
+        // which is also what shows the terminal prompt. A true single-gate UX needs the subprocess +
+        // --permission-prompt-tool stdio model (Phase 3b, where we own chat I/O). For now: diff works,
+        // terminal prompt is a redundant second gate (known limitation).
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = "/K claude",                 // /K keeps the window open after claude exits
+            UseShellExecute = false,                 // required to pass Environment below
+            CreateNoWindow = false,                  // give it its own console window
+        };
+        psi.Environment["ENABLE_IDE_INTEGRATION"] = "true";
+        psi.Environment["CLAUDE_CODE_SSE_PORT"] = _lockfile.Port.ToString();
+        if (!string.IsNullOrEmpty(workspace))
+            psi.WorkingDirectory = workspace;
+
+        try
+        {
+            Process.Start(psi);
+            Log.Info($"Launched Claude Code (port {_lockfile.Port}, cwd '{workspace ?? "(default)"}').");
+        }
+        catch (Exception e)
+        {
+            Log.Error($"Launch Claude Code failed: {e.Message}");
+        }
     }
 
     public void Dispose()

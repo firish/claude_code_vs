@@ -15,16 +15,21 @@ $env:ENABLE_IDE_INTEGRATION="true"; $env:CLAUDE_CODE_SSE_PORT="<port>"; claude
 
 ## Bugs to fix
 
-### B1. Terminal accept/reject prompt doesn't auto-resolve after IDE accept
-- **Symptom:** when the CLI proposes an edit, the accept/reject choice appears in *both* the terminal
-  and our diff viewer. Accepting in the diff viewer applies the change correctly, but the terminal's
-  prompt lingers (doesn't auto-dismiss).
-- **Hypothesis:** after `openDiff` returns `DIFF_ACCEPTED`, the CLI sends `close_tab {tab_name}` (and
-  on connect `closeAllDiffTabs`). We currently **stub both as no-ops** (`TAB_CLOSED`). The CLI may be
-  waiting for the tab to actually close before retracting its terminal prompt.
-- **Action:** trace the JSON-RPC frames after accept (the output pane logs them). Implement `close_tab`
-  / `closeAllDiffTabs` to actually close the tracked diff window frame (`IVsWindowFrame.CloseFrame`)
-  instead of no-op. Confirm the terminal prompt then clears.
+### B1. Dual prompt (terminal + diff) — RESOLVED as a known limitation; true fix is Phase 3
+- **Symptom:** when the CLI proposes an edit, the accept/reject appears in *both* the terminal and our
+  diff viewer; accepting in the diff doesn't dismiss the terminal prompt.
+- **Root cause (confirmed via claude-code-guide + live frames):** the IDE `openDiff` review and the
+  CLI's terminal edit-permission prompt are independent layers. The official VS Code/JetBrains
+  integrations avoid the double prompt only by running `claude` as a **subprocess** with
+  `--permission-prompt-tool stdio` + `--output-format stream-json`, routing permission INTO the IDE.
+  Those flags aren't usable for an interactively-run terminal CLI.
+- **`--permission-mode acceptEdits` does NOT work** — verified live: with acceptEdits the CLI
+  auto-applies the edit and **never calls `openDiff`**, so the diff (our whole value) disappears.
+  openDiff only fires in review-required (default) mode, which is also what shows the terminal prompt.
+  So in the interactive model, diff and terminal-prompt are inseparable. Reverted to default mode.
+- **Resolution:** accept the redundant terminal prompt as a Phase-1 limitation (the diff is the real
+  review). The true single-gate UX requires the **subprocess + `--permission-prompt-tool` model**,
+  which belongs in **Phase 3b** (embedded chat, where we own the CLI's stdio). Tracked there.
 
 ### B2. New files land in the CLI's cwd, not the VS workspace
 - **Symptom:** asked to create a file, the CLI wrote it to `C:\Users\rgulati\source\repos` instead of
@@ -65,6 +70,13 @@ paste/focus/encoding/resize). Split it:
 - **3b (risky, defer):** embed the `claude` terminal/chat itself in the tool window.
 
 Recommendation: do 3a after Phase 2 robustness; attempt 3b only if adoption justifies it.
+
+**Reject-with-reason (requires 3b).** The diff InfoBar is Accept/Reject only, because the `openDiff`
+result can carry only `DIFF_ACCEPTED`/`DIFF_REJECTED` — a *reason* is a chat message and chat input
+goes through the CLI's stdin (the terminal), which we don't own in the terminal model. There is no
+"send user message" in the IDE protocol (our notifications are one-way context). Once 3b hosts chat
+I/O we own stdin, so a "Reject → type why" button can inject the message. Until then: reject in the
+diff, then type the reason in the terminal when Claude asks.
 
 ---
 

@@ -45,9 +45,17 @@ $env:ENABLE_IDE_INTEGRATION="true"; $env:CLAUDE_CODE_SSE_PORT="<port>"; claude
   PreToolUse `permissionDecision`. Result: **no terminal prompt, our diff is the only gate**; on allow
   the CLI writes the file itself. Fail-open on any error (never blocks the CLI). Hook `timeout` set to
   24h so the diff can wait for an unattended user; the model is idle (no API timeout) while waiting.
-- **Status:** proven as a **manual** hook in `diag-test/.claude/` (settings.json + vs-permission-hook.ps1).
-  NEXT: productionize — have the extension auto-install the hook + script so users don't set it up by
-  hand (design choice: project- vs user-level settings; opt-in vs automatic on Launch).
+- **Status: DONE + productionized.** The Launch command auto-installs the hook (embedded script +
+  merges a PreToolUse entry into the workspace `.claude/settings.json`, idempotent), 24h hook timeout.
+  Plus: **reject-with-reason** (a "Reject with feedback" diff action whose text becomes the hook's
+  `permissionDecisionReason`, so Claude reconsiders) and **run-wild** (a panel "Auto-accept" checkbox
+  that makes `/permission` allow without a diff; resets each VS session). After an allow, the open doc
+  auto-reloads (if clean) so the editor refreshes immediately.
+- **UTF-8 gotcha (cost several rounds):** the hook path has FOUR encoding points and all must be UTF-8,
+  or non-ASCII content (em-dashes, smart quotes) silently breaks: (1) the hook's POST body bytes,
+  (2) the bridge's body read, (3) the hook's `Get-Content` of the file (PS 5.1 defaults to ANSI),
+  (4) the hook's STDIN read of the payload (default console input encoding). #4 garbles `old_string`,
+  so reconstruction matches nothing and the diff shows 0 changes even though Claude writes correctly.
 
 ### B2. New files land in the CLI's cwd, not the VS workspace
 - **Symptom:** asked to create a file, the CLI wrote it to `C:\Users\rgulati\source\repos` instead of

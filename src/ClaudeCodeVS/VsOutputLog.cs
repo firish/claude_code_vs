@@ -47,4 +47,11 @@ internal sealed class VsOutputLog
         _pane.OutputStringThreadSafe(line);
 #pragma warning restore VSTHRD010
     }
+
+    /// <summary>Bring this pane forward in the Output window. Must be called on the UI thread.</summary>
+    public void Activate()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        _pane.Activate();
+    }
 }

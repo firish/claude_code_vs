@@ -74,10 +74,11 @@
     </None>
   </ItemGroup>
 
-  <!-- The single-gate PreToolUse hook script, embedded so the extension can write it into a
-       workspace's .claude/ folder on launch. -->
+  <!-- Hook scripts, embedded so the extension can write them into a workspace's .claude/ folder on
+       launch: the single-gate PreToolUse hook and the Stop usage-stats hook. -->
   <ItemGroup>
     <EmbeddedResource Include="Hooks\vs-permission-hook.ps1" />
+    <EmbeddedResource Include="Hooks\vs-usage-hook.ps1" />
   </ItemGroup>
 
   <ItemGroup>

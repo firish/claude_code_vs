@@ -8,15 +8,21 @@ using Newtonsoft.Json.Linq;
 namespace ClaudeCodeVs.Hooks;
 
 /// <summary>
-/// Installs the single-gate PreToolUse hook into a workspace's .claude/ folder: writes the embedded
-/// hook script and merges a PreToolUse entry into .claude/settings.json (preserving everything else;
-/// idempotent). Called from the Launch command. Best-effort — never throws into the launch path.
+/// Installs the extension's hooks into a workspace's .claude/ folder: writes the embedded hook scripts
+/// and merges entries into .claude/settings.json (preserving everything else; idempotent). Called from
+/// the Launch command. Best-effort — never throws into the launch path.
+/// - PreToolUse (Edit|Write|MultiEdit) -> the single-gate permission hook (our diff is the edit gate).
+/// - Stop -> the usage hook (reports the transcript path so the panel can show token/cost stats).
 /// </summary>
 internal static class PermissionHookInstaller
 {
-    private const string ScriptFileName = "vs-permission-hook.ps1";
-    private const string HookCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File .claude/vs-permission-hook.ps1";
-    private const int HookTimeoutSeconds = 86400; // 24h, so the diff can wait for an unattended user
+    private const string PermissionScript = "vs-permission-hook.ps1";
+    private const string UsageScript = "vs-usage-hook.ps1";
+    private const int PermissionTimeoutSeconds = 86400; // 24h, so the diff can wait for an unattended user
+    private const int UsageTimeoutSeconds = 10;
+
+    private static string Command(string script) =>
+        $"powershell -NoProfile -ExecutionPolicy Bypass -File .claude/{script}";
 
     public static void EnsureInstalled(string workspaceRoot)
     {
@@ -25,10 +31,11 @@ internal static class PermissionHookInstaller
             var claudeDir = Path.Combine(workspaceRoot, ".claude");
             Directory.CreateDirectory(claudeDir);
 
-            // 1) (Over)write the hook script from the embedded copy, so updates ship with the extension.
-            File.WriteAllText(Path.Combine(claudeDir, ScriptFileName), ReadEmbeddedScript());
+            // 1) (Over)write the hook scripts from the embedded copies, so updates ship with the extension.
+            File.WriteAllText(Path.Combine(claudeDir, PermissionScript), ReadEmbeddedScript(PermissionScript));
+            File.WriteAllText(Path.Combine(claudeDir, UsageScript), ReadEmbeddedScript(UsageScript));
 
-            // 2) Merge a PreToolUse hook into .claude/settings.json, preserving any existing content.
+            // 2) Merge hook entries into .claude/settings.json, preserving any existing content.
             var settingsPath = Path.Combine(claudeDir, "settings.json");
             JObject root;
             if (File.Exists(settingsPath))
@@ -36,7 +43,7 @@ internal static class PermissionHookInstaller
                 try { root = JObject.Parse(File.ReadAllText(settingsPath)); }
                 catch (Exception e)
                 {
-                    Log.Warn($"single-gate: couldn't parse {settingsPath}; leaving it alone ({e.Message})");
+                    Log.Warn($"hooks: couldn't parse {settingsPath}; leaving it alone ({e.Message})");
                     return;
                 }
             }
@@ -47,53 +54,69 @@ internal static class PermissionHookInstaller
 
             var hooks = root["hooks"] as JObject ?? new JObject();
             root["hooks"] = hooks;
-            var pre = hooks["PreToolUse"] as JArray ?? new JArray();
-            hooks["PreToolUse"] = pre;
 
-            if (AlreadyInstalled(pre)) return;
+            bool addedPre = EnsureHook(hooks, "PreToolUse", "Edit|Write|MultiEdit", PermissionScript, PermissionTimeoutSeconds);
+            bool addedStop = EnsureHook(hooks, "Stop", matcher: null, UsageScript, UsageTimeoutSeconds);
 
-            pre.Add(new JObject
+            if (!addedPre && !addedStop)
             {
-                ["matcher"] = "Edit|Write|MultiEdit",
-                ["hooks"] = new JArray(new JObject
-                {
-                    ["type"] = "command",
-                    ["command"] = HookCommand,
-                    ["timeout"] = HookTimeoutSeconds,
-                }),
-            });
+                Log.Info("hooks: PreToolUse + Stop already present; nothing to change");
+                return;
+            }
 
             File.WriteAllText(settingsPath, root.ToString(Formatting.Indented));
-            Log.Info($"single-gate: installed PreToolUse hook in {settingsPath}");
+            Log.Info($"hooks: updated {settingsPath} (PreToolUse {(addedPre ? "ADDED" : "present")}, Stop {(addedStop ? "ADDED" : "present")})");
         }
         catch (Exception e)
         {
-            Log.Warn($"single-gate hook install failed: {e.Message}");
+            Log.Warn($"hook install failed: {e.Message}");
         }
     }
 
-    private static bool AlreadyInstalled(JArray preToolUse)
+    /// <summary>Add a hook for <paramref name="eventName"/> pointing at <paramref name="script"/> if not already present. Returns true if it changed settings.</summary>
+    private static bool EnsureHook(JObject hooks, string eventName, string? matcher, string script, int timeoutSeconds)
     {
-        foreach (var entry in preToolUse.OfType<JObject>())
+        var arr = hooks[eventName] as JArray ?? new JArray();
+        hooks[eventName] = arr;
+        if (AlreadyInstalled(arr, script)) return false;
+
+        var entry = new JObject
+        {
+            ["hooks"] = new JArray(new JObject
+            {
+                ["type"] = "command",
+                ["command"] = Command(script),
+                ["timeout"] = timeoutSeconds,
+            }),
+        };
+        if (matcher != null)
+            entry["matcher"] = matcher;
+        arr.Add(entry);
+        return true;
+    }
+
+    private static bool AlreadyInstalled(JArray eventHooks, string script)
+    {
+        foreach (var entry in eventHooks.OfType<JObject>())
         {
             if (entry["hooks"] is not JArray hs) continue;
             foreach (var h in hs.OfType<JObject>())
             {
                 var cmd = (string?)h["command"];
-                if (cmd != null && cmd.IndexOf(ScriptFileName, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (cmd != null && cmd.IndexOf(script, StringComparison.OrdinalIgnoreCase) >= 0)
                     return true;
             }
         }
         return false;
     }
 
-    private static string ReadEmbeddedScript()
+    private static string ReadEmbeddedScript(string scriptFileName)
     {
         var asm = typeof(PermissionHookInstaller).Assembly;
         var name = asm.GetManifestResourceNames()
-            .FirstOrDefault(n => n.EndsWith(ScriptFileName, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => n.EndsWith(scriptFileName, StringComparison.OrdinalIgnoreCase));
         if (name == null)
-            throw new InvalidOperationException("embedded permission hook script not found");
+            throw new InvalidOperationException($"embedded hook script not found: {scriptFileName}");
         using var stream = asm.GetManifestResourceStream(name)!;
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();

@@ -1,14 +1,17 @@
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeCodeVs.Ui;
 
 /// <summary>
 /// A tiny modal dialog asking why the user is rejecting a change. The text is fed back to Claude as
 /// the PreToolUse hook's permissionDecisionReason, so Claude reconsiders with the feedback. Built in
-/// code (no XAML). Must be shown on the UI thread.
+/// code (no XAML). Must be shown on the UI thread. Derives from VS's <see cref="DialogWindow"/> so it
+/// follows the IDE theme (dark/light) instead of being a white WPF window.
 /// </summary>
-internal sealed class ReasonDialog : Window
+internal sealed class ReasonDialog : DialogWindow
 {
     private readonly TextBox _box;
 
@@ -21,6 +24,10 @@ internal sealed class ReasonDialog : Window
         ShowInTaskbar = false;
         ResizeMode = ResizeMode.NoResize;
 
+        // DialogWindow themes the chrome but not hand-built content, so brush it from VS theme colors.
+        SetResourceReference(BackgroundProperty, VsBrushes.ToolWindowBackgroundKey);
+        SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+
         var grid = new Grid { Margin = new Thickness(12) };
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -32,6 +39,7 @@ internal sealed class ReasonDialog : Window
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8),
         };
+        prompt.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
         Grid.SetRow(prompt, 0);
 
         _box = new TextBox
@@ -39,7 +47,12 @@ internal sealed class ReasonDialog : Window
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Padding = new Thickness(4),
         };
+        _box.SetResourceReference(BackgroundProperty, VsBrushes.WindowKey);
+        _box.SetResourceReference(ForegroundProperty, VsBrushes.WindowTextKey);
+        _box.SetResourceReference(TextBox.CaretBrushProperty, VsBrushes.WindowTextKey);
+        _box.SetResourceReference(BorderBrushProperty, VsBrushes.ComboBoxBorderKey);
         Grid.SetRow(_box, 1);
 
         var buttons = new StackPanel

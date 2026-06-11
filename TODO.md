@@ -17,6 +17,22 @@ robustness, not new tools.
 Phase 2 deferred/optional: Roslyn-precise diagnostic spans, C++ diagnostics test, reconnect/multi-
 window hardening, theme-aware diff chrome.
 
+**Phase 3a panel — themed + stats (done).** The dockable panel is now VS-theme-aware (dark/light via
+`VsBrushes`), with a status pill, toolbar (Launch / run-wild / Clear / Output), a stats card, a
+pending-diff strip, and a curated activity feed (raw frames stay in the Output pane). Stats: edit
+decisions (accepted/rejected) and **token usage + estimated cost**, shown as **Latest** (most recent
+API call) and **Session** (cumulative). Cost sits behind a toggle and is labelled an estimate.
+- **Usage source:** the IDE protocol carries no token data, so we parse the CLI **transcript JSONL**
+  (`UsageTracker`). The transcript path arrives via hooks. The **Stop hook installs but doesn't fire
+  reliably**, so usage is refreshed by piggybacking the **transcript_path on the /permission hook**
+  (fires on every edit) — the reliable trigger. Stop hook kept as a backup.
+- **Token display nuance:** "in" = `input_tokens + cache_creation` (input_tokens alone is ~1 under
+  prompt caching and reads as a bug); "cached" = `cache_read`. Cost prices are hardcoded per tier
+  (Opus/Sonnet/Haiku, ~Jan 2026) — an estimate, not a bill.
+- **Panel gotcha:** subscribe on `Loaded` / unsubscribe on `Unloaded` (VS fires Unloaded on hide/dock,
+  so ctor-only subscription freezes the panel). Themed dialogs need explicit brushing — `DialogWindow`
+  themes the chrome but not hand-built content. CheckBox/label text needs an explicit themed Foreground.
+
 ---
 
 ## Phase 1 history (kept for reference)

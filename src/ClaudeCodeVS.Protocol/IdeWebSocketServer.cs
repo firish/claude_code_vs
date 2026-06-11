@@ -35,6 +35,13 @@ public sealed class IdeWebSocketServer
     /// </summary>
     public Func<string, string, CancellationToken, Task<(bool allow, string? reason)>>? PermissionHandler { get; set; }
 
+    /// <summary>
+    /// Handles a POST /usage request from the Stop hook: given the conversation transcript path, parse
+    /// it and refresh session token/cost stats for the panel. Set by the VSIX; observe-only (the hook
+    /// doesn't act on the reply).
+    /// </summary>
+    public Func<string, CancellationToken, Task>? UsageHandler { get; set; }
+
     public IdeWebSocketServer(int port, string authToken, McpServer mcp)
     {
         _port = port;
@@ -95,6 +102,12 @@ public sealed class IdeWebSocketServer
                 await HandlePermissionRequestAsync(ctx, ct);
                 return;
             }
+            if (string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase)
+                && ctx.Request.Url?.AbsolutePath == "/usage")
+            {
+                await HandleUsageRequestAsync(ctx, ct);
+                return;
+            }
             ctx.Response.StatusCode = 400;
             ctx.Response.Close();
             return;
@@ -153,7 +166,13 @@ public sealed class IdeWebSocketServer
             var o = JObject.Parse(body);
             var filePath = (string?)o["filePath"] ?? "";
             var newContents = (string?)o["newContents"] ?? "";
+            var transcript = (string?)o["transcript_path"];
             Log.Info($"permission request: {filePath} ({newContents.Length} chars)");
+
+            // Refresh token/cost stats from the transcript on each edit. The Stop hook also does this,
+            // but the permission hook is the reliable trigger. Fire-and-forget so the diff isn't delayed.
+            if (!string.IsNullOrEmpty(transcript) && UsageHandler is { } uh)
+                _ = uh(transcript!, ct);
 
             var handler = PermissionHandler;
             if (handler != null && filePath.Length > 0)
@@ -177,6 +196,26 @@ public sealed class IdeWebSocketServer
             ctx.Response.Close();
         }
         catch { /* client gave up */ }
+    }
+
+    private async Task HandleUsageRequestAsync(HttpListenerContext ctx, CancellationToken ct)
+    {
+        try
+        {
+            string body;
+            using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+                body = await reader.ReadToEndAsync();
+            var o = JObject.Parse(body);
+            var transcript = (string?)o["transcript_path"] ?? "";
+            var handler = UsageHandler;
+            if (handler != null && transcript.Length > 0)
+                await handler(transcript, ct);
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"usage request failed: {e.Message}");
+        }
+        try { ctx.Response.StatusCode = 200; ctx.Response.Close(); } catch { /* client gave up */ }
     }
 
     private async Task ReceiveLoopAsync(Connection conn, CancellationToken ct)

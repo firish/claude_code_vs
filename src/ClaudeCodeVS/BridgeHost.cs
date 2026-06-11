@@ -42,6 +42,7 @@ internal sealed class BridgeHost : IDisposable
         var pane = _log;
         Log.Sink = (level, msg) => { pane.WriteLine(level, msg); Ui.BridgeStatus.Append(level, msg); };
         Ui.BridgeStatus.LaunchAction = LaunchClaudeAsync;
+        Ui.BridgeStatus.ShowOutputAction = () => pane.Activate(); // panel's "Output" button (UI thread)
         Log.Info("Claude Code bridge starting…");
 
         // 2) Lockfile lifecycle: reap stale dead-PID files, then claim a free port. (build-plan §3)
@@ -66,6 +67,9 @@ internal sealed class BridgeHost : IDisposable
 
         // Single-gate: the PreToolUse hook POSTs to /permission, which routes here to show the diff.
         _server.PermissionHandler = ShowPermissionDiffAsync;
+
+        // Stats: the Stop hook POSTs the transcript path to /usage; we parse it for tokens/cost.
+        _server.UsageHandler = UsageTracker.UpdateFromTranscriptAsync;
 
         // Run the accept loop in the background. If it ever faults (not a normal shutdown), delete the
         // lockfile so we don't keep advertising a dead bridge that blocks reconnection (issue #5043).
@@ -103,6 +107,7 @@ internal sealed class BridgeHost : IDisposable
         if (Ui.BridgeStatus.AutoAcceptEdits)
         {
             Log.Info($"auto-accept on: allowing {filePath} without review");
+            Ui.BridgeStatus.RecordDecision(accepted: true);
             ScheduleReload(filePath);
             return (true, null);
         }
@@ -113,6 +118,7 @@ internal sealed class BridgeHost : IDisposable
         catch (Exception e) { Log.Warn($"permission temp stage failed: {e.Message}"); }
 
         var decision = _decisions.AwaitDecisionAsync(tab);
+        Ui.BridgeStatus.AddPending(tab, filePath);
         try
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
@@ -124,6 +130,8 @@ internal sealed class BridgeHost : IDisposable
             _decisions.Resolve(tab, true); // fail-open
         }
         var d = await decision;
+        Ui.BridgeStatus.RemovePending(tab);
+        Ui.BridgeStatus.RecordDecision(d.Accepted);
         if (d.Accepted)
             ScheduleReload(filePath);
         return (d.Accepted, d.RejectReason);

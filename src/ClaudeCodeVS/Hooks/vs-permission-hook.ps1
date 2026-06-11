@@ -57,7 +57,7 @@ try {
     }
     if (-not $port) { Emit 'allow' 'no Visual Studio bridge lockfile found' }
 
-    $body = @{ filePath = $file; newContents = $new } | ConvertTo-Json -Compress -Depth 8
+    $body = @{ filePath = $file; newContents = $new; transcript_path = $p.transcript_path } | ConvertTo-Json -Compress -Depth 8
     # Send the body as explicit UTF-8 bytes; Invoke-RestMethod's default string encoding mangles
     # non-ASCII content (em-dashes, smart quotes) into invalid JSON.
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)

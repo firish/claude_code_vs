@@ -35,7 +35,14 @@ internal sealed class WorkspaceWatcher : IVsSolutionEvents, IVsSolutionEvents7, 
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         if (_solution.GetSolutionInfo(out string dir, out _, out _) == VSConstants.S_OK && !string.IsNullOrEmpty(dir))
-            _lockfile.UpdateWorkspaceFolders(new[] { dir.TrimEnd('\\') });
+            SetWorkspace(dir);
+    }
+
+    private void SetWorkspace(string dir)
+    {
+        var root = dir.TrimEnd('\\');
+        _lockfile.UpdateWorkspaceFolders(new[] { root });
+        Ui.BridgeStatus.SetWorkspace(root); // reflect in the dockable panel too
     }
 
     // ---- IVsSolutionEvents (classic solutions) ----
@@ -56,7 +63,7 @@ internal sealed class WorkspaceWatcher : IVsSolutionEvents, IVsSolutionEvents7, 
     public int OnAfterCloseSolution(object pUnkReserved) => VSConstants.S_OK;
 
     // ---- IVsSolutionEvents7 (Open Folder mode) ----
-    public void OnAfterOpenFolder(string folderPath) => _lockfile.UpdateWorkspaceFolders(new[] { folderPath.TrimEnd('\\') });
+    public void OnAfterOpenFolder(string folderPath) => SetWorkspace(folderPath);
     public void OnBeforeCloseFolder(string folderPath) { }
     public void OnQueryCloseFolder(string folderPath, ref int pfCancel) { }
     public void OnAfterCloseFolder(string folderPath) { }

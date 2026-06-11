@@ -74,6 +74,12 @@
     </None>
   </ItemGroup>
 
+  <!-- The single-gate PreToolUse hook script, embedded so the extension can write it into a
+       workspace's .claude/ folder on launch. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Hooks\vs-permission-hook.ps1" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Compiled into the Menus.ctmenu resource referenced by [ProvideMenuResource]. -->
     <VSCTCompile Include="VSCommandTable.vsct">

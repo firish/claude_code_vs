@@ -180,6 +180,11 @@ internal sealed class BridgeHost : IDisposable
 
         string? workspace = await GetWorkspaceRootAsync();
 
+        // Auto-install the single-gate PreToolUse hook into the workspace so accepting/rejecting our
+        // diff is the sole edit gate (no terminal prompt). Best-effort; idempotent; safe to re-run.
+        if (!string.IsNullOrEmpty(workspace))
+            Hooks.PermissionHookInstaller.EnsureInstalled(workspace!);
+
         // Launch in DEFAULT permission mode. We tried --permission-mode acceptEdits to drop the CLI's
         // terminal edit-prompt, but verified it makes the CLI auto-apply edits and NOT call openDiff at
         // all — i.e. it kills our diff (the whole point). In the interactive-terminal model the diff and

@@ -33,21 +33,21 @@ $env:ENABLE_IDE_INTEGRATION="true"; $env:CLAUDE_CODE_SSE_PORT="<port>"; claude
 
 ## Bugs to fix
 
-### B1. Dual prompt (terminal + diff) — RESOLVED as a known limitation; true fix is Phase 3
-- **Symptom:** when the CLI proposes an edit, the accept/reject appears in *both* the terminal and our
-  diff viewer; accepting in the diff doesn't dismiss the terminal prompt.
-- **Root cause (confirmed via claude-code-guide + live frames):** the IDE `openDiff` review and the
-  CLI's terminal edit-permission prompt are independent layers. The official VS Code/JetBrains
-  integrations avoid the double prompt only by running `claude` as a **subprocess** with
-  `--permission-prompt-tool stdio` + `--output-format stream-json`, routing permission INTO the IDE.
-  Those flags aren't usable for an interactively-run terminal CLI.
-- **`--permission-mode acceptEdits` does NOT work** — verified live: with acceptEdits the CLI
-  auto-applies the edit and **never calls `openDiff`**, so the diff (our whole value) disappears.
-  openDiff only fires in review-required (default) mode, which is also what shows the terminal prompt.
-  So in the interactive model, diff and terminal-prompt are inseparable. Reverted to default mode.
-- **Resolution:** accept the redundant terminal prompt as a Phase-1 limitation (the diff is the real
-  review). The true single-gate UX requires the **subprocess + `--permission-prompt-tool` model**,
-  which belongs in **Phase 3b** (embedded chat, where we own the CLI's stdio). Tracked there.
+### B1. Dual prompt — SOLVED via a PreToolUse hook (no subprocess/chat needed)
+- **What didn't work:** `--permission-prompt-tool` is interactive-mode-only-NO (headless only, issue
+  #1429); it can't target our IDE WS tools. `--permission-mode acceptEdits` AND any pre-approval (incl.
+  a hook returning allow) suppress `openDiff` entirely. So "keep openDiff + drop terminal prompt" is
+  impossible.
+- **What works (shipped, verified CLI 2.1.173):** a **PreToolUse hook** on Edit/Write/MultiEdit becomes
+  the single gate. The hook reconstructs the proposed file from `tool_input`, POSTs `{filePath,
+  newContents}` to the bridge's auth-gated **`POST /permission`** endpoint, which shows our native diff
+  (review-only, `writeBack:false`) and returns allow/deny from Accept/Reject. The hook emits that as the
+  PreToolUse `permissionDecision`. Result: **no terminal prompt, our diff is the only gate**; on allow
+  the CLI writes the file itself. Fail-open on any error (never blocks the CLI). Hook `timeout` set to
+  24h so the diff can wait for an unattended user; the model is idle (no API timeout) while waiting.
+- **Status:** proven as a **manual** hook in `diag-test/.claude/` (settings.json + vs-permission-hook.ps1).
+  NEXT: productionize — have the extension auto-install the hook + script so users don't set it up by
+  hand (design choice: project- vs user-level settings; opt-in vs automatic on Launch).
 
 ### B2. New files land in the CLI's cwd, not the VS workspace
 - **Symptom:** asked to create a file, the CLI wrote it to `C:\Users\rgulati\source\repos` instead of

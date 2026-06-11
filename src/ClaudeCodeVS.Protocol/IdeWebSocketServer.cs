@@ -23,6 +23,9 @@ public sealed class IdeWebSocketServer
     private readonly HttpListener _listener = new();
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
 
+    /// <summary>Raised when a CLI client connects (true) or disconnects (false = no clients remain).</summary>
+    public event Action<bool>? ConnectionChanged;
+
     public IdeWebSocketServer(int port, string authToken, McpServer mcp)
     {
         _port = port;
@@ -105,6 +108,7 @@ public sealed class IdeWebSocketServer
         var conn = new Connection(wsCtx.WebSocket);
         _connections[conn] = 0;
         Log.Info($"client connected from {remote} (authorized)");
+        try { ConnectionChanged?.Invoke(true); } catch { }
 
         try
         {
@@ -115,6 +119,7 @@ public sealed class IdeWebSocketServer
             _connections.TryRemove(conn, out _);
             conn.Dispose();
             Log.Info($"client disconnected ({remote})");
+            try { ConnectionChanged?.Invoke(HasConnections); } catch { }
         }
     }
 

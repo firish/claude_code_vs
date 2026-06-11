@@ -60,6 +60,14 @@
     <Compile Include="**\*.cs" Exclude="bin\**;obj\**" />
   </ItemGroup>
 
+  <!-- WPF for the dockable tool window (net48 framework assemblies). -->
+  <ItemGroup>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>

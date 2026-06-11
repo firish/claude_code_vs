@@ -34,15 +34,19 @@ internal sealed class BridgeHost : IDisposable
 
     public async Task StartAsync(CancellationToken ct)
     {
-        // 1) Logging first, so everything below is visible in the "Claude Code" output pane.
+        // 1) Logging first, so everything below is visible. Fan out to BOTH the VS output pane and the
+        //    dockable panel's status buffer.
         _log = await VsOutputLog.CreateAsync(AsyncServiceProvider.GlobalProvider);
-        _log.Install();
+        var pane = _log;
+        Log.Sink = (level, msg) => { pane.WriteLine(level, msg); Ui.BridgeStatus.Append(level, msg); };
+        Ui.BridgeStatus.LaunchAction = LaunchClaudeAsync;
         Log.Info("Claude Code bridge starting…");
 
         // 2) Lockfile lifecycle: reap stale dead-PID files, then claim a free port. (build-plan §3)
         Lockfile.ReapStale();
         var folders = await GetWorkspaceFoldersAsync();
         _lockfile = Lockfile.CreateForFreePort(folders);
+        Ui.BridgeStatus.SetEndpoint(_lockfile.Port, folders.Count > 0 ? folders[0] : null);
 
         // 3) Tool registry. Core 4 (stubbed for now) + parity stubs; the diff coordinator is shared
         //    between openDiff and the (future) Accept/Reject InfoBar.
@@ -55,6 +59,9 @@ internal sealed class BridgeHost : IDisposable
 
         // Let the selection tracker push selection_changed over this server.
         Editor.SelectionService.Attach(_server, ThreadHelper.JoinableTaskFactory);
+
+        // Reflect CLI connect/disconnect in the dockable panel.
+        _server.ConnectionChanged += connected => Ui.BridgeStatus.SetConnected(connected);
 
         // Run the accept loop in the background. If it ever faults (not a normal shutdown), delete the
         // lockfile so we don't keep advertising a dead bridge that blocks reconnection (issue #5043).

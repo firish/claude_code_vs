@@ -3,8 +3,10 @@ using System.ComponentModel.Design;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ClaudeCodeVs.Ui;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
 using Task = System.Threading.Tasks.Task;
 
@@ -23,6 +25,7 @@ namespace ClaudeCodeVs;
 // and the package fails with "Could not load file or assembly 'ClaudeCodeVS' ...". This fixes that.
 [ProvideBindingPath]
 [ProvideMenuResource("Menus.ctmenu", 1)] // the compiled VSCommandTable.vsct
+[ProvideToolWindow(typeof(ClaudeToolWindow))] // the dockable "Claude Code" panel
 [ProvideAutoLoad(VSConstants.UICONTEXT.ShellInitialized_string, PackageAutoLoadFlags.BackgroundLoad)]
 public sealed class ClaudeCodeVsPackage : AsyncPackage
 {
@@ -35,12 +38,14 @@ public sealed class ClaudeCodeVsPackage : AsyncPackage
         _host = new BridgeHost(this);
         await _host.StartAsync(cancellationToken);
 
-        // Register the Tools → "Launch Claude Code" command.
+        // Register the Tools → "Launch Claude Code" and "Claude Code Panel" commands.
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (await GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService mcs)
         {
-            var id = new CommandID(PackageGuids.CommandSet, PackageIds.LaunchClaude);
-            mcs.AddCommand(new MenuCommand(OnLaunchClaude, id));
+            mcs.AddCommand(new MenuCommand(OnLaunchClaude,
+                new CommandID(PackageGuids.CommandSet, PackageIds.LaunchClaude)));
+            mcs.AddCommand(new MenuCommand(OnShowPanel,
+                new CommandID(PackageGuids.CommandSet, PackageIds.ShowPanel)));
         }
     }
 
@@ -49,6 +54,14 @@ public sealed class ClaudeCodeVsPackage : AsyncPackage
         var host = _host;
         if (host is null) return;
         JoinableTaskFactory.RunAsync(host.LaunchClaudeAsync).FileAndForget("claudecodevs/launch");
+    }
+
+    private void OnShowPanel(object sender, EventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var window = FindToolWindow(typeof(ClaudeToolWindow), 0, create: true);
+        if (window?.Frame is IVsWindowFrame frame)
+            ErrorHandler.ThrowOnFailure(frame.Show());
     }
 
     protected override void Dispose(bool disposing)
@@ -70,4 +83,5 @@ internal static class PackageIds
 {
     // Must match the IDSymbol values in VSCommandTable.vsct.
     public const int LaunchClaude = 0x0100;
+    public const int ShowPanel = 0x0101;
 }

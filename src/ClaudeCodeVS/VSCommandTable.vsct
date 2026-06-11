@@ -21,6 +21,12 @@
           <ButtonText>Launch Claude Code</ButtonText>
         </Strings>
       </Button>
+      <Button guid="guidClaudeCmdSet" id="ShowPanelId" priority="0x0101" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="ClaudeMenuGroup" />
+        <Strings>
+          <ButtonText>Claude Code Panel</ButtonText>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -29,6 +35,7 @@
     <GuidSymbol name="guidClaudeCmdSet" value="{9495bbbb-756d-4dc4-807d-1408d50e7d33}">
       <IDSymbol name="ClaudeMenuGroup" value="0x1020" />
       <IDSymbol name="LaunchClaudeId" value="0x0100" />
+      <IDSymbol name="ShowPanelId" value="0x0101" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

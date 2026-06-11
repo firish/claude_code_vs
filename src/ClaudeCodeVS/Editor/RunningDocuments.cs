@@ -152,6 +152,32 @@ internal static class RunningDocuments
         finally { Marshal.Release(docData); }
     }
 
+    /// <summary>
+    /// If the document is open and has no unsaved changes, reload it from disk so the editor reflects
+    /// an external write (the CLI's edit in the single-gate path). Skips dirty docs to avoid clobbering
+    /// unsaved work. Call on the UI thread.
+    /// </summary>
+    public static void ReloadIfClean(string path)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var rdt = Rdt();
+        if (rdt == null) return;
+        if (rdt.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock, path, out _, out _, out IntPtr docData, out _) != VSConstants.S_OK
+            || docData == IntPtr.Zero)
+            return;
+        try
+        {
+            if (Marshal.GetObjectForIUnknown(docData) is IVsPersistDocData pdd)
+            {
+                if (pdd.IsDocDataDirty(out int dirty) == VSConstants.S_OK && dirty != 0)
+                    return; // don't discard unsaved edits
+                pdd.ReloadDocData(0);
+            }
+        }
+        catch { /* best effort */ }
+        finally { Marshal.Release(docData); }
+    }
+
     /// <summary>True if the document is currently open in the RDT.</summary>
     public static bool IsOpen(string path)
     {

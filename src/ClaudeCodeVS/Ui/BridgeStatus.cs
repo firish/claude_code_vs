@@ -21,6 +21,19 @@ internal static class BridgeStatus
     public static string? Workspace { get; private set; }
     public static bool Connected { get; private set; }
 
+    /// <summary>
+    /// Run-wild: when true, the permission gate auto-allows edits without opening the diff. In-memory
+    /// only (resets each VS session) so it's never silently left on.
+    /// </summary>
+    public static bool AutoAcceptEdits { get; private set; }
+
+    public static void SetAutoAcceptEdits(bool value)
+    {
+        if (AutoAcceptEdits == value) return;
+        AutoAcceptEdits = value;
+        Changed?.Invoke();
+    }
+
     /// <summary>Set by BridgeHost so the panel's Launch button can start the CLI.</summary>
     public static Func<Task>? LaunchAction { get; set; }
 

@@ -35,31 +35,48 @@ public sealed class ToolRegistry
     public bool TryGet(string name, out IIdeTool tool) => _tools.TryGetValue(name, out tool!);
 }
 
+/// <summary>The outcome of a diff review: accepted, or rejected (optionally with feedback for the CLI).</summary>
+public readonly struct DiffDecision
+{
+    public DiffDecision(bool accepted, string? rejectReason = null)
+    {
+        Accepted = accepted;
+        RejectReason = rejectReason;
+    }
+
+    public bool Accepted { get; }
+
+    /// <summary>On reject, optional text the user wants Claude to act on (drives reject-with-reason).</summary>
+    public string? RejectReason { get; }
+}
+
 /// <summary>
-/// Deferred-decision coordinator for openDiff. The tool call must NOT return until the user
-/// accepts/rejects, so we park a TaskCompletionSource keyed by tab_name and complete it later from
-/// the Accept/Reject InfoBar handlers. This is the mechanism that makes the CLI block on the user
-/// (CLAUDE.md convention #3). Pure BCL, so it lives in the protocol core; the VSIX wires the UI to it.
+/// Deferred-decision coordinator for openDiff / the permission gate. The call must NOT return until
+/// the user accepts/rejects, so we park a TaskCompletionSource keyed by tab_name and complete it later
+/// from the Accept/Reject UI (CLAUDE.md convention #3). Pure BCL, so it lives in the protocol core.
 /// </summary>
 public sealed class DiffDecisions
 {
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pending = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<DiffDecision>> _pending = new();
     private readonly ConcurrentQueue<string> _order = new(); // FIFO so a "resolve oldest" affordance hits the first-opened
 
-    public Task<bool> AwaitDecisionAsync(string tabName)
+    public Task<DiffDecision> AwaitDecisionAsync(string tabName)
     {
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<DiffDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[tabName] = tcs;
         _order.Enqueue(tabName);
         return tcs.Task;
     }
 
-    public bool Resolve(string tabName, bool accepted)
+    public bool Resolve(string tabName, DiffDecision decision)
     {
         if (_pending.TryRemove(tabName, out var tcs))
-            return tcs.TrySetResult(accepted);
+            return tcs.TrySetResult(decision);
         return false;
     }
+
+    /// <summary>Convenience for accept/plain-reject without a reason.</summary>
+    public bool Resolve(string tabName, bool accepted) => Resolve(tabName, new DiffDecision(accepted));
 
     /// <summary>Resolve the oldest still-pending diff (a convenience for "accept/reject the current diff").</summary>
     public bool ResolveOldest(bool accepted)

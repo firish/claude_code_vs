@@ -2,16 +2,9 @@ internal static class Program
 {
     private static void Main()
     {
-        int x = 0;
-        x += 1;
+        // Deliberate compile error: CS0029 cannot implicitly convert 'string' to 'int'.
+        // Used to verify getDiagnostics surfaces real C# errors (open this as a project so Roslyn analyzes it).
+        int x = "oops";
         System.Console.WriteLine(x);
-        System.Console.WriteLine("done");
-        System.Console.WriteLine($"x squared = {x * x}");
-
-        for (int i = 0; i < 8; i++)
-        {
-            double delay = Math.Pow(2, i);
-            System.Console.WriteLine($"Attempt {i + 1}: retry in {delay}s");
-        }
     }
 }

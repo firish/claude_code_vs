@@ -8,6 +8,7 @@ using ClaudeCodeVs.Tools;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Threading;
 using Task = System.Threading.Tasks.Task;
 
 namespace ClaudeCodeVs;
@@ -96,8 +97,16 @@ internal sealed class BridgeHost : IDisposable
     /// CLI writes the file itself once the edit is allowed) and return whether the user accepted. The
     /// bridge's /permission endpoint calls this; the PreToolUse hook posts to that endpoint.
     /// </summary>
-    private async Task<bool> ShowPermissionDiffAsync(string filePath, string newContents, CancellationToken ct)
+    private async Task<(bool allow, string? reason)> ShowPermissionDiffAsync(string filePath, string newContents, CancellationToken ct)
     {
+        // Run-wild: when auto-accept is on, allow immediately without opening the diff.
+        if (Ui.BridgeStatus.AutoAcceptEdits)
+        {
+            Log.Info($"auto-accept on: allowing {filePath} without review");
+            ScheduleReload(filePath);
+            return (true, null);
+        }
+
         var tab = "perm:" + Guid.NewGuid().ToString("N");
         var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"claudeperm_{Guid.NewGuid():N}.tmp");
         try { System.IO.File.WriteAllText(temp, newContents); }
@@ -114,7 +123,31 @@ internal sealed class BridgeHost : IDisposable
             Log.Error($"permission diff failed (allowing): {e.Message}");
             _decisions.Resolve(tab, true); // fail-open
         }
-        return await decision;
+        var d = await decision;
+        if (d.Accepted)
+            ScheduleReload(filePath);
+        return (d.Accepted, d.RejectReason);
+    }
+
+    /// <summary>
+    /// After an edit is allowed, the CLI writes the file itself; the open editor only notices on focus.
+    /// Give the CLI a moment to write, then reload the doc (if clean) so it refreshes immediately.
+    /// </summary>
+    private void ScheduleReload(string filePath)
+    {
+        // Intentional fire-and-forget (FileAndForget reports faults to the activity log).
+#pragma warning disable VSSDK007
+        ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        {
+            try
+            {
+                await Task.Delay(500, _cts.Token);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(_cts.Token);
+                Editor.RunningDocuments.ReloadIfClean(filePath);
+            }
+            catch (Exception e) { Log.Warn($"post-edit reload failed: {e.Message}"); }
+        }).FileAndForget("claudecodevs/reload");
+#pragma warning restore VSSDK007
     }
 
     private static IEnumerable<IIdeTool> BuildTools(DiffDecisions decisions)

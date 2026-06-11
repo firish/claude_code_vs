@@ -47,7 +47,4 @@ internal sealed class VsOutputLog
         _pane.OutputStringThreadSafe(line);
 #pragma warning restore VSTHRD010
     }
-
-    /// <summary>Point the protocol core's logger at this pane.</summary>
-    public void Install() => PLog.Sink = WriteLine;
 }

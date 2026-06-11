@@ -25,13 +25,17 @@ function ApplyEdit([string]$content, [string]$old, [string]$new, [bool]$all) {
 }
 
 try {
-    $payload = [Console]::In.ReadToEnd()
+    # Read stdin as UTF-8: the default console input encoding garbles non-ASCII (em-dashes, smart
+    # quotes) in the hook payload, which then fails to match the file content during reconstruction.
+    $stdin = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
+    $payload = $stdin.ReadToEnd()
     $p = $payload | ConvertFrom-Json
     $tool = $p.tool_name
     $ti = $p.tool_input
     $file = $ti.file_path
 
-    $cur = if ($file -and (Test-Path -LiteralPath $file)) { Get-Content -Raw -LiteralPath $file } else { '' }
+    # Read as UTF-8 (PS 5.1 Get-Content defaults to the ANSI codepage, which garbles em-dashes etc.).
+    $cur = if ($file -and (Test-Path -LiteralPath $file)) { Get-Content -Raw -LiteralPath $file -Encoding UTF8 } else { '' }
     switch ($tool) {
         'Write'     { $new = [string]$ti.content }
         'Edit'      { $new = ApplyEdit $cur $ti.old_string $ti.new_string ([bool]$ti.replace_all) }
@@ -54,13 +58,21 @@ try {
     if (-not $port) { Emit 'allow' 'no Visual Studio bridge lockfile found' }
 
     $body = @{ filePath = $file; newContents = $new } | ConvertTo-Json -Compress -Depth 8
+    # Send the body as explicit UTF-8 bytes; Invoke-RestMethod's default string encoding mangles
+    # non-ASCII content (em-dashes, smart quotes) into invalid JSON.
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$port/permission" -Method Post `
-        -ContentType 'application/json' `
+        -ContentType 'application/json; charset=utf-8' `
         -Headers @{ 'x-claude-code-ide-authorization' = $token } `
-        -Body $body -TimeoutSec 86400
+        -Body $bytes -TimeoutSec 86400
 
-    if ($resp.allow) { Emit 'allow' 'Accepted in Visual Studio diff' }
-    else { Emit 'deny' 'Rejected in Visual Studio diff' }
+    if ($resp.allow) {
+        Emit 'allow' 'Accepted in Visual Studio diff'
+    }
+    else {
+        $why = if ($resp.reason) { [string]$resp.reason } else { 'Rejected in Visual Studio diff' }
+        Emit 'deny' $why
+    }
 }
 catch {
     Emit 'allow' ("hook error (allowing): " + $_.Exception.Message)

@@ -15,6 +15,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
 {
     private readonly TextBlock _status;
     private readonly TextBox _log;
+    private readonly CheckBox _autoAccept;
 
     public ClaudeToolWindowControl()
     {
@@ -32,6 +33,18 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         launch.Click += (s, e) => { try { _ = BridgeStatus.LaunchAction?.Invoke(); } catch { /* logged elsewhere */ } };
         DockPanel.SetDock(launch, Dock.Right);
+
+        _autoAccept = new CheckBox
+        {
+            Content = "Auto-accept (run wild)",
+            ToolTip = "Apply edits without opening the diff. Resets when VS restarts.",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0),
+        };
+        _autoAccept.Checked += (s, e) => BridgeStatus.SetAutoAcceptEdits(true);
+        _autoAccept.Unchecked += (s, e) => BridgeStatus.SetAutoAcceptEdits(false);
+        DockPanel.SetDock(_autoAccept, Dock.Right);
+
         _status = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
@@ -39,7 +52,8 @@ internal sealed class ClaudeToolWindowControl : UserControl
             Margin = new Thickness(0, 0, 8, 0),
         };
         header.Children.Add(launch);
-        header.Children.Add(_status);
+        header.Children.Add(_autoAccept);
+        header.Children.Add(_status); // last child fills
         Grid.SetRow(header, 0);
 
         // Log view.
@@ -90,6 +104,9 @@ internal sealed class ClaudeToolWindowControl : UserControl
 
     private void UpdateStatus()
     {
+        if (_autoAccept.IsChecked != BridgeStatus.AutoAcceptEdits)
+            _autoAccept.IsChecked = BridgeStatus.AutoAcceptEdits;
+
         if (BridgeStatus.Port is not int port)
         {
             _status.Text = "Claude Code bridge: starting…";

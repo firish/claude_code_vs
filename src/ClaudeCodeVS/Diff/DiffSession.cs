@@ -18,6 +18,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
 {
     private const string Accept = "Accept";
     private const string Reject = "Reject";
+    private const string RejectWithReason = "Reject with feedback…";
 
     private readonly DiffDecisions _decisions;
     private readonly string _tabName;
@@ -117,7 +118,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
 
         var model = new InfoBarModel(
             new[] { new InfoBarTextSpan($"Claude Code proposes changes to {Path.GetFileName(_newPath)}. ") },
-            new[] { new InfoBarHyperlink(Accept), new InfoBarHyperlink(Reject) },
+            new[] { new InfoBarHyperlink(Accept), new InfoBarHyperlink(Reject), new InfoBarHyperlink(RejectWithReason) },
             KnownMonikers.StatusInformation,
             isCloseButtonVisible: true);
 
@@ -129,7 +130,20 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
     public void OnActionItemClicked(IVsInfoBarUIElement infoBarUIElement, IVsInfoBarActionItem actionItem)
     {
         ThreadHelper.ThrowIfNotOnUIThread(); // VS raises this event on the UI thread
-        Resolve(string.Equals(actionItem.Text, Accept, StringComparison.Ordinal));
+        var text = actionItem.Text;
+        if (string.Equals(text, Accept, StringComparison.Ordinal))
+        {
+            Resolve(true);
+        }
+        else if (string.Equals(text, RejectWithReason, StringComparison.Ordinal))
+        {
+            var reason = Ui.ReasonDialog.Prompt(System.IO.Path.GetFileName(_newPath));
+            Resolve(false, reason);
+        }
+        else
+        {
+            Resolve(false);
+        }
     }
 
     public void OnClosed(IVsInfoBarUIElement infoBarUIElement)
@@ -141,7 +155,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         Resolve(false);
     }
 
-    private void Resolve(bool accepted)
+    private void Resolve(bool accepted, string? rejectReason = null)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         if (_resolved) return;
@@ -174,6 +188,6 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         if (_ownedLeftTemp is not null)
             try { File.Delete(_ownedLeftTemp); } catch { /* best effort */ }
 
-        _decisions.Resolve(_tabName, accepted);
+        _decisions.Resolve(_tabName, new DiffDecision(accepted, accepted ? null : rejectReason));
     }
 }

@@ -29,10 +29,11 @@ public sealed class IdeWebSocketServer
 
     /// <summary>
     /// Handles a POST /permission request from the PreToolUse hook: given (filePath, proposed new
-    /// contents), show a review diff and return whether to allow the edit. Set by the VSIX; null means
-    /// no handler (fail-open). This is how single-gate works — the hook gates the edit through our diff.
+    /// contents), show a review diff and return whether to allow the edit (+ an optional reject reason
+    /// to feed back to the CLI). Set by the VSIX; null means no handler (fail-open). This is how
+    /// single-gate works — the hook gates the edit through our diff.
     /// </summary>
-    public Func<string, string, CancellationToken, Task<bool>>? PermissionHandler { get; set; }
+    public Func<string, string, CancellationToken, Task<(bool allow, string? reason)>>? PermissionHandler { get; set; }
 
     public IdeWebSocketServer(int port, string authToken, McpServer mcp)
     {
@@ -140,10 +141,13 @@ public sealed class IdeWebSocketServer
     private async Task HandlePermissionRequestAsync(HttpListenerContext ctx, CancellationToken ct)
     {
         bool allow = true; // fail-open: never block the CLI because our review path errored
+        string? reason = null;
         try
         {
             string body;
-            using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
+            // Always read as UTF-8 (the hook sends UTF-8). Trusting ContentEncoding can mangle
+            // non-ASCII content (em-dashes, smart quotes) into invalid JSON.
+            using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                 body = await reader.ReadToEndAsync();
 
             var o = JObject.Parse(body);
@@ -153,7 +157,7 @@ public sealed class IdeWebSocketServer
 
             var handler = PermissionHandler;
             if (handler != null && filePath.Length > 0)
-                allow = await handler(filePath, newContents, ct);
+                (allow, reason) = await handler(filePath, newContents, ct);
             Log.Info($"permission decision: {(allow ? "allow" : "deny")} for {filePath}");
         }
         catch (Exception e)
@@ -164,7 +168,7 @@ public sealed class IdeWebSocketServer
 
         try
         {
-            var json = new JObject { ["allow"] = allow }.ToString(Formatting.None);
+            var json = new JObject { ["allow"] = allow, ["reason"] = reason }.ToString(Formatting.None);
             var bytes = Encoding.UTF8.GetBytes(json);
             ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "application/json";

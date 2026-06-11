@@ -76,7 +76,7 @@ internal sealed class OpenDiffTool : IIdeTool
         }).FileAndForget("claudecodevs/openDiff");
 #pragma warning restore VSSDK007
 
-        bool ok = await decision; // BLOCKS until the user decides
+        bool ok = (await decision).Accepted; // BLOCKS until the user decides
         Log.Info($"openDiff: {(ok ? "ACCEPTED" : "REJECTED")} '{tabName}'");
 
         return ok ? "DIFF_ACCEPTED" : "DIFF_REJECTED";

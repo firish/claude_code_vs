@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -25,6 +26,13 @@ public sealed class IdeWebSocketServer
 
     /// <summary>Raised when a CLI client connects (true) or disconnects (false = no clients remain).</summary>
     public event Action<bool>? ConnectionChanged;
+
+    /// <summary>
+    /// Handles a POST /permission request from the PreToolUse hook: given (filePath, proposed new
+    /// contents), show a review diff and return whether to allow the edit. Set by the VSIX; null means
+    /// no handler (fail-open). This is how single-gate works — the hook gates the edit through our diff.
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<bool>>? PermissionHandler { get; set; }
 
     public IdeWebSocketServer(int port, string authToken, McpServer mcp)
     {
@@ -77,9 +85,15 @@ public sealed class IdeWebSocketServer
             return;
         }
 
-        // 2) Must actually be a WebSocket upgrade.
+        // 2) Plain HTTP POST /permission (from the PreToolUse hook) — the single-gate path.
         if (!ctx.Request.IsWebSocketRequest)
         {
+            if (string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase)
+                && ctx.Request.Url?.AbsolutePath == "/permission")
+            {
+                await HandlePermissionRequestAsync(ctx, ct);
+                return;
+            }
             ctx.Response.StatusCode = 400;
             ctx.Response.Close();
             return;
@@ -121,6 +135,44 @@ public sealed class IdeWebSocketServer
             Log.Info($"client disconnected ({remote})");
             try { ConnectionChanged?.Invoke(HasConnections); } catch { }
         }
+    }
+
+    private async Task HandlePermissionRequestAsync(HttpListenerContext ctx, CancellationToken ct)
+    {
+        bool allow = true; // fail-open: never block the CLI because our review path errored
+        try
+        {
+            string body;
+            using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
+                body = await reader.ReadToEndAsync();
+
+            var o = JObject.Parse(body);
+            var filePath = (string?)o["filePath"] ?? "";
+            var newContents = (string?)o["newContents"] ?? "";
+            Log.Info($"permission request: {filePath} ({newContents.Length} chars)");
+
+            var handler = PermissionHandler;
+            if (handler != null && filePath.Length > 0)
+                allow = await handler(filePath, newContents, ct);
+            Log.Info($"permission decision: {(allow ? "allow" : "deny")} for {filePath}");
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"permission request failed (allowing): {e.Message}");
+            allow = true;
+        }
+
+        try
+        {
+            var json = new JObject { ["allow"] = allow }.ToString(Formatting.None);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentType = "application/json";
+            ctx.Response.ContentLength64 = bytes.Length;
+            await ctx.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length, ct);
+            ctx.Response.Close();
+        }
+        catch { /* client gave up */ }
     }
 
     private async Task ReceiveLoopAsync(Connection conn, CancellationToken ct)

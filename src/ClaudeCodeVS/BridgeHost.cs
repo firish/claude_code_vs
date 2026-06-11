@@ -21,6 +21,7 @@ internal sealed class BridgeHost : IDisposable
 {
     private readonly AsyncPackage _package;
     private readonly CancellationTokenSource _cts = new();
+    private readonly DiffDecisions _decisions = new(); // shared by openDiff and the permission gate
 
     private VsOutputLog? _log;
     private Lockfile? _lockfile;
@@ -48,10 +49,9 @@ internal sealed class BridgeHost : IDisposable
         _lockfile = Lockfile.CreateForFreePort(folders);
         Ui.BridgeStatus.SetEndpoint(_lockfile.Port, folders.Count > 0 ? folders[0] : null);
 
-        // 3) Tool registry. Core 4 (stubbed for now) + parity stubs; the diff coordinator is shared
-        //    between openDiff and the (future) Accept/Reject InfoBar.
-        var decisions = new DiffDecisions();
-        var tools = new ToolRegistry(BuildTools(decisions));
+        // 3) Tool registry. The diff coordinator (_decisions) is shared between openDiff and the
+        //    single-gate permission path.
+        var tools = new ToolRegistry(BuildTools(_decisions));
         var mcp = new McpServer(tools);
 
         // 4) Start the localhost WS server on the claimed port.
@@ -62,6 +62,9 @@ internal sealed class BridgeHost : IDisposable
 
         // Reflect CLI connect/disconnect in the dockable panel.
         _server.ConnectionChanged += connected => Ui.BridgeStatus.SetConnected(connected);
+
+        // Single-gate: the PreToolUse hook POSTs to /permission, which routes here to show the diff.
+        _server.PermissionHandler = ShowPermissionDiffAsync;
 
         // Run the accept loop in the background. If it ever faults (not a normal shutdown), delete the
         // lockfile so we don't keep advertising a dead bridge that blocks reconnection (issue #5043).
@@ -86,6 +89,32 @@ internal sealed class BridgeHost : IDisposable
         }
 
         Log.Info($"Bridge ready on port {_lockfile.Port}. To connect: run `claude` in your workspace, then /ide.");
+    }
+
+    /// <summary>
+    /// Single-gate permission path: show the proposed change as a REVIEW-ONLY diff (no write-back — the
+    /// CLI writes the file itself once the edit is allowed) and return whether the user accepted. The
+    /// bridge's /permission endpoint calls this; the PreToolUse hook posts to that endpoint.
+    /// </summary>
+    private async Task<bool> ShowPermissionDiffAsync(string filePath, string newContents, CancellationToken ct)
+    {
+        var tab = "perm:" + Guid.NewGuid().ToString("N");
+        var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"claudeperm_{Guid.NewGuid():N}.tmp");
+        try { System.IO.File.WriteAllText(temp, newContents); }
+        catch (Exception e) { Log.Warn($"permission temp stage failed: {e.Message}"); }
+
+        var decision = _decisions.AwaitDecisionAsync(tab);
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+            Diff.DiffSession.Open(filePath, filePath, newContents, tab, temp, _decisions, writeBack: false);
+        }
+        catch (Exception e)
+        {
+            Log.Error($"permission diff failed (allowing): {e.Message}");
+            _decisions.Resolve(tab, true); // fail-open
+        }
+        return await decision;
     }
 
     private static IEnumerable<IIdeTool> BuildTools(DiffDecisions decisions)

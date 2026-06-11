@@ -25,6 +25,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
     private readonly string _contents;
     private readonly string _tempPath;
     private readonly string? _ownedLeftTemp; // an empty left file we created for "new file" diffs
+    private readonly bool _writeBack;         // false = review-only (hook/permission path: the CLI writes)
     private readonly IVsWindowFrame _frame;
 
     private IVsInfoBarUIElement? _infoBar;
@@ -32,7 +33,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
     private bool _resolved;
 
     private DiffSession(DiffDecisions decisions, string tabName, string newPath, string contents,
-                        string tempPath, string? ownedLeftTemp, IVsWindowFrame frame)
+                        string tempPath, string? ownedLeftTemp, bool writeBack, IVsWindowFrame frame)
     {
         _decisions = decisions;
         _tabName = tabName;
@@ -40,6 +41,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         _contents = contents;
         _tempPath = tempPath;
         _ownedLeftTemp = ownedLeftTemp;
+        _writeBack = writeBack;
         _frame = frame;
     }
 
@@ -48,7 +50,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
     /// asynchronously through <paramref name="decisions"/> when the user clicks Accept/Reject.
     /// </summary>
     public static void Open(string oldPath, string newPath, string contents, string tabName,
-                            string tempPath, DiffDecisions decisions)
+                            string tempPath, DiffDecisions decisions, bool writeBack = true)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -82,7 +84,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         if (frame is null)
             throw new InvalidOperationException("OpenComparisonWindow2 returned no window frame");
 
-        var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, frame);
+        var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, writeBack, frame);
         DiffRegistry.Register(tabName, session);
         session.AttachInfoBar();
         frame.Show();
@@ -146,7 +148,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         _resolved = true;
         DiffRegistry.Unregister(_tabName);
 
-        if (accepted)
+        if (accepted && _writeBack)
         {
             try
             {

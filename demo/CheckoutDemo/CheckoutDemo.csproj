@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Demo fixture for the README/launch GIF. Program.cs has ONE deliberate, realistic compile error
+       (CS0019) so you can record: "fetch the errors and fix them" -> getDiagnostics -> native diff ->
+       Accept -> error clears. Open this PROJECT in VS (File > Open > Project/Solution) so Roslyn
+       analyzes it and the Error List populates. Mirrors diag-test's verified setup. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

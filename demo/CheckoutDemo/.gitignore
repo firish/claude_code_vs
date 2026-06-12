@@ -1,0 +1,4 @@
+# Build output + the hooks the extension writes on Launch — keep only the fixture sources.
+bin/
+obj/
+.claude/

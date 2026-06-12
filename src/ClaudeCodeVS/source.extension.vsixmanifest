@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="ClaudeCodeVS.d9032717-8a83-4ab5-9b63-2fe9d9a78481" Version="0.1.0" Language="en-US" Publisher="US Calibration" />
+    <Identity Id="ClaudeCodeVS.d9032717-8a83-4ab5-9b63-2fe9d9a78481" Version="1.0.0" Language="en-US" Publisher="US Calibration" />
     <DisplayName>Claude Code for Visual Studio</DisplayName>
-    <Description xml:space="preserve">Bridges the Claude Code CLI into Visual Studio: a native diff window with accept/reject, plus automatic selection and compiler-diagnostics context. The CLI does the agent work; this extension is the IDE half of Claude Code's integration protocol.</Description>
-    <Tags>claude, claude code, ai, anthropic, diff, mcp</Tags>
+    <Description xml:space="preserve">Bring Claude Code into Visual Studio: a native diff window with accept/reject (and reject-with-feedback), automatic selection and C#/C++ compiler-diagnostics context, and a live token/cost panel. The claude CLI does the agent work; this extension is the IDE half of Claude Code's integration protocol. Requires the Claude Code CLI. Unofficial, not affiliated with Anthropic.</Description>
+    <MoreInfo>https://github.com/uscalibration/claude-code-vs</MoreInfo>
+    <ReleaseNotes>https://github.com/uscalibration/claude-code-vs/releases</ReleaseNotes>
+    <Tags>claude, claude code, ai, anthropic, llm, agent, coding assistant, diff, mcp, c++, c#</Tags>
+    <!-- TODO before publishing: replace the github.com/uscalibration/... URLs above with your real repo. -->
+    <!-- TODO before publishing: add asset files and uncomment these (paths relative to this manifest):
+    <Icon>Resources\icon.png</Icon>                  90x90 PNG
+    <PreviewImage>Resources\preview.png</PreviewImage> ~200x200 PNG
+    <License>LICENSE.txt</License>                    a copy of the MIT LICENSE inside the project
+    -->
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,19.0)">

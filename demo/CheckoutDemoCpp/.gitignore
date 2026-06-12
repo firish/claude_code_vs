@@ -1,0 +1,10 @@
+# Build output, VS per-user state, and the hooks the extension writes on Launch.
+# Keep only the fixture sources (.sln, .vcxproj, main.cpp).
+bin/
+obj/
+x64/
+Debug/
+Release/
+.vs/
+.claude/
+*.user

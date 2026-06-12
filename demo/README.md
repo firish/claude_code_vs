@@ -46,9 +46,38 @@ It reads `CS0019` via `getDiagnostics`, then changes:
 
 A clean one-line diff — exactly what reads well in a GIF.
 
-## Note on C++ (the #15942 audience)
+## C++ fixture (`CheckoutDemoCpp`) — for the #15942 audience
 
-This fixture is **C#** on purpose: the `getDiagnostics` path is *verified* for C#. The C++ path is
-designed (Error List backend) but **not yet tested end-to-end**. Since the #15942 thread is C++
-developers, you'll want a C++ clip too — but **verify C++ `getDiagnostics` works before recording it**,
-so the demo doesn't fall flat on the exact audience it's for. Ask and we'll build + test a C++ fixture.
+Same bug in C++ (a `std::string` tax rate multiplied by a `double`), as a console solution so VS loads
+it and the Error List populates. **This is the clip to lead with in #15942** — but two things first.
+
+### Prerequisite: the C++ workload (currently NOT installed here)
+A build check on this machine failed with `Microsoft.Cpp.Default.props was not found (…\VC\v180\…)`,
+which means **"Desktop development with C++" is not installed in VS 2026**. Until it is, the project
+can't build, IntelliSense won't analyze it, and `getDiagnostics` will have nothing to read.
+
+Install it: **Visual Studio Installer → Modify (VS 2026) → Desktop development with C++ → Modify**.
+When you first open `CheckoutDemoCpp.sln`, if VS offers to **retarget** to the installed toolset, accept
+it (the project pins `v143`; one click upgrades it).
+
+### Verify the path before recording (the important step)
+C++ `getDiagnostics` reads the **Error List**, and IntelliSense can lag, so make the error
+deterministic by **building first**:
+
+1. Open `demo/CheckoutDemoCpp/CheckoutDemoCpp.sln`; retarget if prompted.
+2. **Build** (Ctrl+Shift+B) — it fails; the Error List shows the C++ type error.
+3. Launch Claude from the panel, then: `Build is failing — fetch the compiler errors and fix them.`
+4. Confirm Claude's `getDiagnostics` call actually returns the C++ error (watch the **Output → Claude
+   Code** pane for `getDiagnostics … -> 1 file(s)` with diagnostics, not `[]`).
+5. If it returns the error → record the clip (same shot list as above). If it returns `[]` → the C++
+   Error List read needs a fix in `ErrorListReader` before this is demo-able; tell me and we'll fix it.
+
+The fix Claude should make:
+
+```diff
+- const std::string taxRate = "0.08";
++ const double taxRate = 0.08;
+```
+
+> **Recording order:** ship the **C# GIF** now (verified). Only post the **C++ clip** to #15942 after
+> step 4 actually returns diagnostics — don't demo an unverified path to the audience that asked for it.

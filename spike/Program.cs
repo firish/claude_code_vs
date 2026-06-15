@@ -76,7 +76,7 @@ return exitCode;
 // ---------------------------------------------------------------------------
 
 // Block until the WS server has actually bound the port (Start() is sync, but RunAsync is on
-// another task — a brief poll avoids a connect race in the automated modes).
+// another task - a brief poll avoids a connect race in the automated modes).
 async Task WaitUntilListeningAsync(CancellationToken ct)
 {
     for (int i = 0; i < 50 && !ct.IsCancellationRequested; i++)

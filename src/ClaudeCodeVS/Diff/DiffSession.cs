@@ -149,7 +149,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
     public void OnClosed(IVsInfoBarUIElement infoBarUIElement)
     {
         ThreadHelper.ThrowIfNotOnUIThread(); // VS raises this event on the UI thread
-        // The user dismissed the InfoBar without choosing → treat as reject so the CLI unblocks.
+        // The user dismissed the InfoBar without choosing -> treat as reject so the CLI unblocks.
         if (_infoBar is not null)
             _infoBar.Unadvise(_cookie);
         Resolve(false);

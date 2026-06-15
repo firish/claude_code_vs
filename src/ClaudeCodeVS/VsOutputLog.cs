@@ -10,7 +10,7 @@ namespace ClaudeCodeVs;
 /// <summary>
 /// Routes the protocol core's <see cref="PLog"/> output to a "Claude Code" pane in the VS Output
 /// window. Created once on the UI thread; thereafter <see cref="WriteLine"/> uses
-/// <c>OutputStringThreadSafe</c>, which is safe to call from the off-thread WS receive loop — so no
+/// <c>OutputStringThreadSafe</c>, which is safe to call from the off-thread WS receive loop - so no
 /// per-line marshaling is needed (CLAUDE.md convention #1 is about VS *editor/solution* calls; the
 /// output pane has its own thread-safe entry point).
 /// </summary>
@@ -42,7 +42,7 @@ internal sealed class VsOutputLog
         var line = $"[{level.ToString().ToLowerInvariant()}] {message}{Environment.NewLine}";
         // OutputStringThreadSafe is the documented thread-safe entry point, so the off-thread WS loop
         // can call it directly. VSTHRD010 flags all IVsOutputWindowPane members as main-thread-only and
-        // can't see that exception — suppress it locally.
+        // can't see that exception - suppress it locally.
 #pragma warning disable VSTHRD010
         _pane.OutputStringThreadSafe(line);
 #pragma warning restore VSTHRD010

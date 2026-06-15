@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 namespace ClaudeCodeVs.Tools;
 
-/// <summary>getOpenEditors — the file documents currently open in VS, with their unsaved (dirty) state.</summary>
+/// <summary>getOpenEditors - the file documents currently open in VS, with their unsaved (dirty) state.</summary>
 internal sealed class GetOpenEditorsTool : IIdeTool
 {
     public string Name => "getOpenEditors";
@@ -40,7 +40,7 @@ internal sealed class GetOpenEditorsTool : IIdeTool
     }
 }
 
-/// <summary>getWorkspaceFolders — the open solution/folder root(s).</summary>
+/// <summary>getWorkspaceFolders - the open solution/folder root(s).</summary>
 internal sealed class GetWorkspaceFoldersTool : IIdeTool
 {
     public string Name => "getWorkspaceFolders";
@@ -69,7 +69,7 @@ internal sealed class GetWorkspaceFoldersTool : IIdeTool
     }
 }
 
-/// <summary>checkDocumentDirty — whether a file is open and has unsaved changes.</summary>
+/// <summary>checkDocumentDirty - whether a file is open and has unsaved changes.</summary>
 internal sealed class CheckDocumentDirtyTool : IIdeTool
 {
     public string Name => "checkDocumentDirty";
@@ -92,7 +92,7 @@ internal sealed class CheckDocumentDirtyTool : IIdeTool
     }
 }
 
-/// <summary>saveDocument — save an open document if it has unsaved changes.</summary>
+/// <summary>saveDocument - save an open document if it has unsaved changes.</summary>
 internal sealed class SaveDocumentTool : IIdeTool
 {
     public string Name => "saveDocument";

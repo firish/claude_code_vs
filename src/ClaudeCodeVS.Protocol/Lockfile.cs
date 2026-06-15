@@ -8,7 +8,7 @@ namespace ClaudeCodeVs.Protocol;
 
 /// <summary>
 /// The lockfile is how the CLI discovers that "an IDE is here". It lives at
-/// <c>~/.claude/ide/&lt;port&gt;.lock</c> — and the filename IS the port the WS server listens on.
+/// <c>~/.claude/ide/&lt;port&gt;.lock</c> - and the filename IS the port the WS server listens on.
 /// See build-plan.md §3. Ported verbatim from the Phase 0 spike with two net48 fixes
 /// (<c>Environment.ProcessId</c> is .NET 5+).
 /// </summary>
@@ -36,7 +36,7 @@ public sealed class Lockfile
     /// <summary>
     /// Pick a free loopback port, then write the lockfile for it. We bind a throwaway
     /// TcpListener to port 0 (OS assigns a free port), read the assignment, and release it.
-    /// There's a tiny TOCTOU window before the WS server grabs the port — acceptable in practice.
+    /// There's a tiny TOCTOU window before the WS server grabs the port - acceptable in practice.
     /// </summary>
     public static Lockfile CreateForFreePort(IReadOnlyList<string> workspaceFolders)
     {
@@ -99,7 +99,7 @@ public sealed class Lockfile
 
     /// <summary>
     /// On startup, remove lockfiles whose owning process is dead. A stale lockfile pointing at a
-    /// dead WS server blocks reconnection (issue #5043). We ONLY delete dead-PID files — never
+    /// dead WS server blocks reconnection (issue #5043). We ONLY delete dead-PID files - never
     /// another live IDE's (e.g. a running VS Code) lockfile.
     /// </summary>
     public static void ReapStale()
@@ -155,7 +155,7 @@ public sealed class Lockfile
         }
     }
 
-    /// <summary>Exact on-disk schema. Property names are wire-critical — do not rename casually.</summary>
+    /// <summary>Exact on-disk schema. Property names are wire-critical - do not rename casually.</summary>
     private sealed class LockfileDoc
     {
         [JsonProperty("pid")] public int Pid { get; set; }

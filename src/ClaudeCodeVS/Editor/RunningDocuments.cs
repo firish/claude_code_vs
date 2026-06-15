@@ -35,7 +35,7 @@ internal static class RunningDocuments
 
     /// <summary>
     /// All open editor tabs with their dirty state. Sourced from document *window frames*
-    /// (IVsUIShell.GetDocumentWindowEnum), NOT the RDT — VS only adds a doc to the RDT once it's been
+    /// (IVsUIShell.GetDocumentWindowEnum), NOT the RDT - VS only adds a doc to the RDT once it's been
     /// activated, so background tabs are missing from the RDT but present as frames.
     /// </summary>
     public static List<OpenDoc> OpenDocuments()
@@ -133,7 +133,7 @@ internal static class RunningDocuments
         try
         {
             if (Marshal.GetObjectForIUnknown(docData) is not IVsTextBuffer vsBuffer)
-                return false; // not a text document (e.g. a designer) — let the caller write to disk
+                return false; // not a text document (e.g. a designer) - let the caller write to disk
 
             var cm = ServiceProvider.GlobalProvider.GetService(typeof(SComponentModel)) as IComponentModel;
             var adapters = cm?.GetService<IVsEditorAdaptersFactoryService>();

@@ -25,7 +25,7 @@ public sealed class McpServer
     {
         JObject root;
         try { root = JObject.Parse(json); }
-        catch { return null; } // not parseable as an object — ignore
+        catch { return null; } // not parseable as an object - ignore
 
         var method = (string?)root["method"];
         if (method is null)
@@ -49,7 +49,7 @@ public sealed class McpServer
                 return Response(id, new JObject());
 
             default:
-                // Notifications (no id) we don't handle — just log and stay quiet.
+                // Notifications (no id) we don't handle - just log and stay quiet.
                 if (id is null)
                 {
                     Log.Event($"ignoring notification: {method}");

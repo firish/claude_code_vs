@@ -14,7 +14,7 @@ namespace ClaudeCodeVs.Editor;
 /// Central, process-wide selection state. The MEF <see cref="TextViewListener"/> feeds it whenever a
 /// caret/selection moves or an editor gains focus; the selection tools read from it and the debounced
 /// <c>selection_changed</c> notification is pushed from here. Kept static because the MEF view
-/// listener is composed by VS's editor — separate from our package — and both need the same instance.
+/// listener is composed by VS's editor - separate from our package - and both need the same instance.
 /// </summary>
 internal static class SelectionService
 {

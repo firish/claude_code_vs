@@ -11,12 +11,12 @@ namespace ClaudeCodeVs.Editor;
 /// <summary>
 /// Reads the Visual Studio Error List and groups entries by file in LSP shape. The Error List is a
 /// unified sink: Roslyn pushes live C#/.NET diagnostics into it, and the C++ toolchain pushes its
-/// errors/warnings too — so this single path serves both languages (build-plan §5; C++ is the #15942
+/// errors/warnings too - so this single path serves both languages (build-plan §5; C++ is the #15942
 /// audience). Ranges are point ranges (the Error List exposes a single line/column).
 /// </summary>
 internal static class ErrorListReader
 {
-    /// <summary>Map of absolute file path → array of LSP diagnostic objects. Call on the UI thread.</summary>
+    /// <summary>Map of absolute file path -> array of LSP diagnostic objects. Call on the UI thread.</summary>
     public static Dictionary<string, JArray> Read()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -74,7 +74,7 @@ internal static class ErrorListReader
         return byFile;
     }
 
-    // __VSERRORCATEGORY: EC_ERROR=0, EC_WARNING=1, EC_MESSAGE=2  →  LSP: 1=Error,2=Warning,3=Information
+    // __VSERRORCATEGORY: EC_ERROR=0, EC_WARNING=1, EC_MESSAGE=2  ->  LSP: 1=Error,2=Warning,3=Information
     private static int CategoryToLspSeverity(uint category) => category switch
     {
         0 => 1,

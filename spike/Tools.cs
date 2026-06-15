@@ -35,7 +35,7 @@ internal sealed class ToolRegistry
 // ---------------------------------------------------------------------------
 // Deferred-decision coordinator for openDiff. The tool call must NOT return until
 // the user accepts/rejects, so we park a TaskCompletionSource keyed by tab_name and
-// complete it later — from a console keypress, or auto-accept in --auto-accept-diffs mode.
+// complete it later - from a console keypress, or auto-accept in --auto-accept-diffs mode.
 // ---------------------------------------------------------------------------
 internal sealed class DiffDecisions
 {
@@ -72,7 +72,7 @@ internal sealed class DiffDecisions
 }
 
 // ---------------------------------------------------------------------------
-// openDiff — the centerpiece. In the spike we just write the proposed contents to a
+// openDiff - the centerpiece. In the spike we just write the proposed contents to a
 // temp file (the gotcha: new_file_contents is in-memory) and block on the decision.
 // The real extension renders IVsDifferenceService + an Accept/Reject InfoBar here.
 // ---------------------------------------------------------------------------

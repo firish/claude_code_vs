@@ -24,7 +24,7 @@ internal static class Log
     public static void Error(string msg) => Write(Red, "ERROR", msg);
     public static void Event(string msg) => Write(Dim, "·    ", msg);
 
-    /// <summary>Log a JSON-RPC frame. <paramref name="inbound"/> = CLI→us, else us→CLI.</summary>
+    /// <summary>Log a JSON-RPC frame. <paramref name="inbound"/> = CLI->us, else us->CLI.</summary>
     public static void Frame(bool inbound, string json)
     {
         var arrow = inbound ? "<<" : ">>";
@@ -51,7 +51,7 @@ internal static class Log
         }
         catch
         {
-            return json; // not JSON (shouldn't happen) — log raw
+            return json; // not JSON (shouldn't happen) - log raw
         }
     }
 

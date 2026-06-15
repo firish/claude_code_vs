@@ -6,7 +6,7 @@ using Newtonsoft.Json.Linq;
 
 namespace ClaudeCodeVs.Tools;
 
-/// <summary>close_tab — close the diff window for a given tab_name (part of the core diff flow).</summary>
+/// <summary>close_tab - close the diff window for a given tab_name (part of the core diff flow).</summary>
 internal sealed class CloseTabTool : IIdeTool
 {
     public string Name => "close_tab";
@@ -28,7 +28,7 @@ internal sealed class CloseTabTool : IIdeTool
     }
 }
 
-/// <summary>closeAllDiffTabs — close every open diff (the CLI calls this on connect to clear leftovers).</summary>
+/// <summary>closeAllDiffTabs - close every open diff (the CLI calls this on connect to clear leftovers).</summary>
 internal sealed class CloseAllDiffTabsTool : IIdeTool
 {
     public string Name => "closeAllDiffTabs";

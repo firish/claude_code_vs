@@ -49,7 +49,7 @@ internal sealed class McpServer
                 return Response(id, new JsonObject());
 
             default:
-                // Notifications (no id) we don't handle — just log and stay quiet.
+                // Notifications (no id) we don't handle - just log and stay quiet.
                 if (id is null)
                 {
                     Log.Event($"ignoring notification: {method}");

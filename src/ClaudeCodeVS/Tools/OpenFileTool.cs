@@ -11,7 +11,7 @@ using Newtonsoft.Json.Linq;
 namespace ClaudeCodeVs.Tools;
 
 /// <summary>
-/// openFile — open a document in the editor and optionally select/reveal a line range (build-plan §5).
+/// openFile - open a document in the editor and optionally select/reveal a line range (build-plan §5).
 /// Lines from the protocol are treated as 0-based (consistent with selection/diagnostics). startText/
 /// endText selection and the preview tab are Phase 2; we honor filePath, startLine/endLine, makeFrontmost.
 /// </summary>

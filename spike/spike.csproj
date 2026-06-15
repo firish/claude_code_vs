@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Phase 0 protocol spike. Standalone net8.0 console — NOT the extension.
+    Phase 0 protocol spike. Standalone net8.0 console - NOT the extension.
     Purpose: prove the undocumented Claude Code IDE-integration contract end-to-end
     before touching the VS SDK. See build-plan.md §7.
 

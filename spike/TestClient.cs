@@ -7,7 +7,7 @@ namespace ClaudeCodeVs.Spike;
 
 /// <summary>
 /// An automated stand-in for the CLI: it discovers the server via the lockfile, connects with the
-/// auth header, and exercises the full MCP surface — asserting the wire shapes along the way.
+/// auth header, and exercises the full MCP surface - asserting the wire shapes along the way.
 /// This proves our SERVER is correct without needing an interactive `/ide` session. The real CLI
 /// is the separate, authoritative check (see ClaudeLauncher / the manual run hint).
 /// </summary>

@@ -8,7 +8,7 @@ namespace ClaudeCodeVs.Spike;
 
 /// <summary>
 /// Localhost-only WebSocket server (HttpListener) that speaks MCP to the CLI. Auth is validated
-/// during the HTTP upgrade — before the socket opens — so unauthorized clients never get a socket.
+/// during the HTTP upgrade - before the socket opens - so unauthorized clients never get a socket.
 /// The same HttpListener + System.Net.WebSockets code carries over to the net48 in-proc extension.
 /// See build-plan.md §3 and CLAUDE.md "Non-negotiable conventions" #2.
 /// </summary>
@@ -63,7 +63,7 @@ internal sealed class IdeWebSocketServer
     {
         var remote = ctx.Request.RemoteEndPoint?.ToString() ?? "?";
 
-        // 1) Auth at the HTTP upgrade — reject before any socket is created. Never log the token.
+        // 1) Auth at the HTTP upgrade - reject before any socket is created. Never log the token.
         var presented = ctx.Request.Headers[AuthHeader];
         if (!string.Equals(presented, _authToken, StringComparison.Ordinal))
         {
@@ -74,7 +74,7 @@ internal sealed class IdeWebSocketServer
         }
 
         // DIAGNOSTIC (spike): dump the upgrade request headers so we can see exactly what the real
-        // CLI sends — subprotocol, version, origin, etc. The auth token value is redacted.
+        // CLI sends - subprotocol, version, origin, etc. The auth token value is redacted.
         LogUpgradeHeaders(ctx.Request);
 
         // 2) Must actually be a WebSocket upgrade.
@@ -85,7 +85,7 @@ internal sealed class IdeWebSocketServer
             return;
         }
 
-        // 3) Accept the socket. Echo back the client's requested subprotocol if it offered one —
+        // 3) Accept the socket. Echo back the client's requested subprotocol if it offered one -
         // AcceptWebSocketAsync throws if we name a subprotocol the client didn't request, so only
         // pass through what was actually offered.
         string? subprotocol = FirstRequestedSubprotocol(ctx.Request);

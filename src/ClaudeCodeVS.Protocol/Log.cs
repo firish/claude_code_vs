@@ -5,7 +5,7 @@ public enum LogLevel { Info, Warn, Error, Event, Frame }
 /// <summary>
 /// Minimal pluggable logger. The spike wrote to the console; inside the VSIX we redirect <see cref="Sink"/>
 /// to a Visual Studio output pane. Kept dependency-free so the protocol core stays pure BCL.
-/// Never log the auth token (CLAUDE.md convention #2) — call sites redact it before logging.
+/// Never log the auth token (CLAUDE.md convention #2) - call sites redact it before logging.
 /// </summary>
 public static class Log
 {

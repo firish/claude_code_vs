@@ -11,7 +11,7 @@ namespace ClaudeCodeVs;
 /// <summary>
 /// Parses the Claude Code conversation transcript (a JSONL the CLI writes) to aggregate token usage and
 /// an estimated cost for the session, which the dockable panel shows. The Stop hook hands us the
-/// transcript path via POST /usage. The IDE protocol exposes none of this — the transcript is the only
+/// transcript path via POST /usage. The IDE protocol exposes none of this - the transcript is the only
 /// source. Both the format and the prices are undocumented/version-fragile, so parse defensively and
 /// label the cost an estimate.
 /// </summary>
@@ -83,7 +83,7 @@ internal static class UsageTracker
 
                 // Cumulative session totals…
                 input += freshInput; output += ou; cacheRead += cr; cost += entryCost; turns++;
-                // …and the most recent call (overwritten each iteration → ends on the last).
+                // …and the most recent call (overwritten each iteration -> ends on the last).
                 lastIn = freshInput; lastOut = ou; lastCacheRead = cr; lastCost = entryCost;
             }
 

@@ -97,7 +97,7 @@ internal sealed class BridgeHost : IDisposable
     }
 
     /// <summary>
-    /// Single-gate permission path: show the proposed change as a REVIEW-ONLY diff (no write-back — the
+    /// Single-gate permission path: show the proposed change as a REVIEW-ONLY diff (no write-back - the
     /// CLI writes the file itself once the edit is allowed) and return whether the user accepted. The
     /// bridge's /permission endpoint calls this; the PreToolUse hook posts to that endpoint.
     /// </summary>
@@ -207,7 +207,7 @@ internal sealed class BridgeHost : IDisposable
     }
 
     /// <summary>
-    /// T1 — launch the CLI in a terminal pre-wired to this bridge: a new console with
+    /// T1 - launch the CLI in a terminal pre-wired to this bridge: a new console with
     /// ENABLE_IDE_INTEGRATION + CLAUDE_CODE_SSE_PORT set and the working directory pinned to the
     /// workspace root, so the CLI auto-connects (no /ide) and writes files into the right repo (fixes B2).
     /// </summary>
@@ -228,7 +228,7 @@ internal sealed class BridgeHost : IDisposable
 
         // Launch in DEFAULT permission mode. We tried --permission-mode acceptEdits to drop the CLI's
         // terminal edit-prompt, but verified it makes the CLI auto-apply edits and NOT call openDiff at
-        // all — i.e. it kills our diff (the whole point). In the interactive-terminal model the diff and
+        // all - i.e. it kills our diff (the whole point). In the interactive-terminal model the diff and
         // the terminal prompt are inseparable: openDiff only fires in review-required (default) mode,
         // which is also what shows the terminal prompt. A true single-gate UX needs the subprocess +
         // --permission-prompt-tool stdio model (Phase 3b, where we own chat I/O). For now: diff works,

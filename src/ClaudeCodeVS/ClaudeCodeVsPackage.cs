@@ -38,7 +38,7 @@ public sealed class ClaudeCodeVsPackage : AsyncPackage
         _host = new BridgeHost(this);
         await _host.StartAsync(cancellationToken);
 
-        // Register the Tools → "Launch Claude Code" and "Claude Code Panel" commands.
+        // Register the Tools -> "Launch Claude Code" and "Claude Code Panel" commands.
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         if (await GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService mcs)
         {

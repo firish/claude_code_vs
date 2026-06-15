@@ -10,7 +10,7 @@ namespace ClaudeCodeVs.Protocol;
 
 /// <summary>
 /// Localhost-only WebSocket server (HttpListener) that speaks MCP to the CLI. Auth is validated
-/// during the HTTP upgrade — before the socket opens — so unauthorized clients never get a socket.
+/// during the HTTP upgrade - before the socket opens - so unauthorized clients never get a socket.
 /// The receive loop runs off the UI thread; tool handlers that touch VS must marshal to the main
 /// thread themselves. See build-plan.md §3 and CLAUDE.md "Non-negotiable conventions" #1, #2.
 /// </summary>
@@ -31,7 +31,7 @@ public sealed class IdeWebSocketServer
     /// Handles a POST /permission request from the PreToolUse hook: given (filePath, proposed new
     /// contents), show a review diff and return whether to allow the edit (+ an optional reject reason
     /// to feed back to the CLI). Set by the VSIX; null means no handler (fail-open). This is how
-    /// single-gate works — the hook gates the edit through our diff.
+    /// single-gate works - the hook gates the edit through our diff.
     /// </summary>
     public Func<string, string, CancellationToken, Task<(bool allow, string? reason)>>? PermissionHandler { get; set; }
 
@@ -83,7 +83,7 @@ public sealed class IdeWebSocketServer
     {
         var remote = ctx.Request.RemoteEndPoint?.ToString() ?? "?";
 
-        // 1) Auth at the HTTP upgrade — reject before any socket is created. Never log the token.
+        // 1) Auth at the HTTP upgrade - reject before any socket is created. Never log the token.
         var presented = ctx.Request.Headers[AuthHeader];
         if (!string.Equals(presented, _authToken, StringComparison.Ordinal))
         {
@@ -93,7 +93,7 @@ public sealed class IdeWebSocketServer
             return;
         }
 
-        // 2) Plain HTTP POST /permission (from the PreToolUse hook) — the single-gate path.
+        // 2) Plain HTTP POST /permission (from the PreToolUse hook) - the single-gate path.
         if (!ctx.Request.IsWebSocketRequest)
         {
             if (string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase)

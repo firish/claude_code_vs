@@ -10,7 +10,7 @@ namespace ClaudeCodeVs.Hooks;
 /// <summary>
 /// Installs the extension's hooks into a workspace's .claude/ folder: writes the embedded hook scripts
 /// and merges entries into .claude/settings.json (preserving everything else; idempotent). Called from
-/// the Launch command. Best-effort — never throws into the launch path.
+/// the Launch command. Best-effort - never throws into the launch path.
 /// - PreToolUse (Edit|Write|MultiEdit) -> the single-gate permission hook (our diff is the edit gate).
 /// - Stop -> the usage hook (reports the transcript path so the panel can show token/cost stats).
 /// </summary>

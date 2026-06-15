@@ -9,7 +9,7 @@ using Newtonsoft.Json.Linq;
 namespace ClaudeCodeVs.Tools;
 
 /// <summary>
-/// getDiagnostics — language/build diagnostics from the VS Error List, grouped per file. Always
+/// getDiagnostics - language/build diagnostics from the VS Error List, grouped per file. Always
 /// returns the envelope [{uri, diagnostics:[...]}] (empty array if none), per build-plan §4. When a
 /// uri is supplied we filter to that file and still return its (possibly empty) envelope.
 /// </summary>

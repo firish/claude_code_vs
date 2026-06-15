@@ -11,7 +11,7 @@ using Newtonsoft.Json.Linq;
 namespace ClaudeCodeVs.Tools;
 
 /// <summary>
-/// openDiff — the centerpiece. The tool call must NOT return until the user decides, so we park a
+/// openDiff - the centerpiece. The tool call must NOT return until the user decides, so we park a
 /// TaskCompletionSource (via <see cref="DiffDecisions"/>) and block on it; the UI completes it later
 /// (CLAUDE.md convention #3). The decision UI is VS's native diff viewer plus an Accept/Reject
 /// InfoBar, rendered by <see cref="DiffSession"/>. On accept the proposed contents are written back.

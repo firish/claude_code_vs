@@ -28,7 +28,7 @@ internal static class Schemas
     }
 }
 
-/// <summary>Compact IIdeTool for the parity stubs — name, schema, and a function body.</summary>
+/// <summary>Compact IIdeTool for the parity stubs - name, schema, and a function body.</summary>
 internal sealed class LambdaTool : IIdeTool
 {
     private readonly Func<JToken, CancellationToken, Task<object>> _fn;
@@ -50,7 +50,7 @@ internal sealed class LambdaTool : IIdeTool
 /// <summary>
 /// The remaining parity tools as Phase-1 stubs. Per build-plan §3, close_tab / closeAllDiffTabs are
 /// part of the *core* diff flow (the CLI calls them right after a diff and on connect), so they return
-/// success no-ops rather than errors. executeCode has no VS equivalent → honest MCP error.
+/// success no-ops rather than errors. executeCode has no VS equivalent -> honest MCP error.
 /// </summary>
 internal static class ParityTools
 {

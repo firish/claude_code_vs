@@ -5,7 +5,7 @@
 
     Deliberately PURE BCL (no VS SDK reference): lockfile, localhost WebSocket server, MCP/JSON-RPC
     framing, the IIdeTool seam, and the deferred-diff coordinator. Because it touches no VS service,
-    it compiles and unit-tests on any machine with the net48 targeting pack — which is how we build
+    it compiles and unit-tests on any machine with the net48 targeting pack - which is how we build
     and verify Phase 1's plumbing before Visual Studio 2026 is installed.
 
     Runtime is net48 to match the in-proc VSIX (build-plan.md §8). The VSIX project references this

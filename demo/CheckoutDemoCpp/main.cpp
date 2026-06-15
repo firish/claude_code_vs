@@ -34,7 +34,8 @@ int main() {
 
     std::cout << "Order total: $" << grandTotal(cart) << "\n";
 
-    double discountedTotal = applyDiscount(grandTotal(cart), 10);
-    std::cout << "Discounted total: $" << discountedTotal << "\n";
-    return 0;
+    // Deliberate Bugs
+    double discountedTotal = applyDiscount(grandTotal(cart) 10);
+    std::cout < "Discounted total: $" << discountedTotal << "\n";
+    return 0
 }

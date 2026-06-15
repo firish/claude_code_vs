@@ -34,11 +34,11 @@ Current release ships the core protocol bridge end-to-end: native diff with Acce
 
 ---
 
-## Phase 3 - VS 2022 backfill
+## Phase 3 - VS 2022 verification
 
-**What:** The manifest currently pins `[18.0, 19.0)` (VS 2026 only). VS 2022 (version 17.x) has a much larger installed base.
+**What:** The manifest targets `[17.14, 19.0)` (VS 2022 17.14+ through VS 2026) to satisfy Marketplace policy, but the extension has only been tested on VS 2026. VS 2022 may load it — the in-proc SDK calls (`IVsDifferenceService`, the WPF differencing factory, Roslyn workspace, `IVsRunningDocumentTable`) are not 2026-specific — but it is unverified.
 
-**Cost:** widen the manifest version range to `[17.0, 19.0)` and retest the in-proc SDK calls against the VS 2022 SDK - `IVsDifferenceService`, the WPF differencing factory, Roslyn workspace, and `IVsRunningDocumentTable`. Nothing in the protocol or architecture is 2026-specific; this is a test-matrix exercise, not a fork.
+**Cost:** test the Release `.vsix` on a clean VS 2022 17.14+ install and fix any API incompatibilities.
 
 **Trigger:** do this when GitHub issue demand or download numbers justify it.
 

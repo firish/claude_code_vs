@@ -2,7 +2,7 @@
 
 > Bring [Claude Code](https://claude.com/claude-code) into **Visual Studio 2026** - a native diff window with accept/reject, automatic selection + compiler-diagnostics context, and a live stats panel. The `claude` CLI does the agent work; this extension is the **IDE half** of Claude Code's integration protocol.
 
-![Demo](docs/demo.gif) <!-- TODO: add a short demo GIF at docs/demo.gif -->
+![Demo](docs/demo.gif)
 
 **Status:** community project, not affiliated with Anthropic. **Visual Studio 2026 only**, for now.
 

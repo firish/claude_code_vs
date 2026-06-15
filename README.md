@@ -30,7 +30,7 @@ Claude Code has first-class IDE integration for VS Code and JetBrains, but not V
 ## Install
 
 - **Marketplace:** search *"Claude Code for Visual Studio"* in **Extensions -> Manage Extensions**, or install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/) <!-- TODO: replace with your listing URL -->.
-- **Sideload:** download the `.vsix` from [Releases](https://github.com/uscalibration/claude-code-vs/releases) <!-- TODO: replace with your releases URL --> and double-click it.
+- **Sideload:** download the `.vsix` from [Releases](https://github.com/firish/claude_code_vs/releases) and double-click it.
 
 ## Quickstart
 
@@ -91,4 +91,4 @@ Issues and PRs welcome. The protocol contract is undocumented and has regressed 
 
 ## License
 
-[MIT](LICENSE) © 2026 US Calibration. Not affiliated with Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic, used here only to describe interoperability.
+[MIT](LICENSE) © 2026 Rishi Gulati. Not affiliated with Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic, used here only to describe interoperability.

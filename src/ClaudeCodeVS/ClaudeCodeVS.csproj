@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  In-proc VSIX for VS 2026 (Dev18). net48, VSSDK + Community Toolkit (build-plan.md §8).
+  In-proc VSIX for VS 2026 (Dev18). net48, VSSDK + Community Toolkit.
 
   Package strategy (verified against this machine, 2026-06):
     * Build against the 17.x VS SDK reference assemblies (the only ones on NuGet today); a
@@ -72,6 +72,16 @@
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
     </None>
+  </ItemGroup>
+
+  <!-- VSIX marketplace assets: icon (90x90) and preview (200x200). -->
+  <ItemGroup>
+    <Content Include="Resources\icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="Resources\preview.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
   </ItemGroup>
 
   <!-- Hook scripts, embedded so the extension can write them into a workspace's .claude/ folder on

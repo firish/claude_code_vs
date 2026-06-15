@@ -2,7 +2,7 @@
 
 > Bring [Claude Code](https://claude.com/claude-code) into **Visual Studio 2026** - a native diff window with accept/reject, automatic selection + compiler-diagnostics context, and a live stats panel. The `claude` CLI does the agent work; this extension is the **IDE half** of Claude Code's integration protocol.
 
-![Demo](docs/demo.gif)
+![Demo](https://raw.githubusercontent.com/firish/claude_code_vs/main/docs/demo.gif)
 
 **Status:** community project, not affiliated with Anthropic. **Visual Studio 2026 only**, for now.
 
@@ -29,7 +29,7 @@ Claude Code has first-class IDE integration for VS Code and JetBrains, but not V
 
 ## Install
 
-- **Marketplace:** search *"Claude Code for Visual Studio"* in **Extensions -> Manage Extensions**, or install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/) <!-- TODO: replace with your listing URL -->.
+- **Marketplace:** search *"Claude Code for Visual Studio"* in **Extensions -> Manage Extensions**, or install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=firish.bridgev1).
 - **Sideload:** download the `.vsix` from [Releases](https://github.com/firish/claude_code_vs/releases) and double-click it.
 
 ## Quickstart

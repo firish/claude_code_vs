@@ -83,7 +83,7 @@ Requires Visual Studio 2026 with the Visual Studio extension development workloa
 msbuild src/ClaudeCodeVS/ClaudeCodeVS.csproj /t:Rebuild /p:Configuration=Release
 ```
 
-Press F5 (or launch `devenv /rootsuffix Exp`) to debug in the experimental instance. Architecture and rationale live in [`build-plan.md`](build-plan.md) and [`CLAUDE.md`](CLAUDE.md).
+Press F5 (or launch `devenv /rootsuffix Exp`) to debug in the experimental instance. Architecture and contributor guidance live in [`CLAUDE.md`](CLAUDE.md). Future work lives in [`ROADMAP.md`](ROADMAP.md).
 
 ## Contributing
 

@@ -1,5 +1,0 @@
-# This folder is a scratch space for testing single-gate auto-install. The extension writes
-# .claude/ here on launch, and Claude creates throwaway files during tests. Keep only the fixture.
-/*
-!.gitignore
-!hello.md

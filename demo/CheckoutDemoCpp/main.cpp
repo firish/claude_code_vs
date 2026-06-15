@@ -8,7 +8,7 @@ struct LineItem {
     int quantity;
 };
 
-double subtotal(const std::vector<LineItem>& items) {
+static double subtotal(const std::vector<LineItem>& items) {
     double total = 0.0;
     for (const auto& item : items) {
         total += item.price * item.quantity;
@@ -16,13 +16,14 @@ double subtotal(const std::vector<LineItem>& items) {
     return total;
 }
 
-// BUG (deliberate): the tax rate is a std::string, so it can't be multiplied by a double.
-// The compiler flags grandTotal() below. The clean fix is: const double taxRate = 0.08;
-const std::string taxRate = "0.08";
-
-double grandTotal(const std::vector<LineItem>& items) {
+const double taxRate = 0.08;
+static double grandTotal(const std::vector<LineItem>& items) {
     double sub = subtotal(items);
-    return sub + sub * taxRate; // error: no operator '*' for 'double' and 'std::string'
+    return sub + sub * taxRate;
+}
+
+static double applyDiscount(double price, int percent) {
+    return price - (price * percent / 100);
 }
 
 int main() {
@@ -32,5 +33,8 @@ int main() {
     };
 
     std::cout << "Order total: $" << grandTotal(cart) << "\n";
+
+    double discountedTotal = applyDiscount(grandTotal(cart), 10);
+    std::cout << "Discounted total: $" << discountedTotal << "\n";
     return 0;
 }

@@ -1,32 +1,35 @@
 # CLAUDE.md
 
-Operating context for Claude Code when working in this repo. Full rationale and roadmap live in `build-plan.md` — read it before large changes.
+Operating context for Claude Code when working in this repo. Future work and release plan live in `ROADMAP.md`.
 
 ## What this is
 
 A native **Visual Studio 2026 extension** that launches the real `claude` CLI and implements Claude Code's **IDE-integration protocol** (lockfile + localhost WebSocket speaking MCP/JSON-RPC 2.0). The CLI does all agent work; this extension provides the IDE half: a **native diff window with accept/reject** and **automatic selection + diagnostics context**. We do *not* reimplement the agent, and we do *not* build skills/plugins/hooks — those come from the CLI for free.
 
-If you ever find yourself adding an LLM API call, an agent loop, or a tool the CLI already provides, stop — that's out of scope (that's the failed "Approach B"; see `build-plan.md` §1).
+If you ever find yourself adding an LLM API call, an agent loop, or a tool the CLI already provides, stop — that's out of scope.
 
 ## Working agreement (how we collaborate here)
 
 - **Build in chunks, then teach.** Run free on a defined chunk of work (a phase or a well-scoped task), then — before moving on — explain everything the user needs to know/learn about what was built. The user is shipping this *and* learning the domain (VS SDK, the Claude Code IDE protocol) along the way, so keep code and decisions explainable and don't bury rationale.
-- **Ask before design decisions with tradeoffs.** When a fork has real tradeoffs (not a choice with an obvious default), surface it with a recommendation and let the user decide. Decisions already locked in `build-plan.md` §8 don't need re-asking.
+- **Ask before design decisions with tradeoffs.** When a fork has real tradeoffs (not a choice with an obvious default), surface it with a recommendation and let the user decide. Decisions clearly load-bearing in the existing code don't need re-asking.
 - **Ask when an instruction is unclear** rather than guessing and running.
 
 ## Architecture (where things live)
 
-- `src/Protocol/` — lockfile writer, WS server, MCP handshake, JSON-RPC framing.
-- `src/Tools/` — one `IIdeTool` per protocol tool (openDiff, getCurrentSelection, getDiagnostics, openFile, …).
-- `src/Diff/` — diff rendering + accept/reject InfoBar + write-back.
-- `src/Launcher/` — spawns `claude` with the right env.
+- `src/ClaudeCodeVS.Protocol/` — lockfile writer, WS server, MCP/JSON-RPC framing.
+- `src/ClaudeCodeVS/Tools/` — one `IIdeTool` per protocol tool (openDiff, openFile, getCurrentSelection, getDiagnostics, …).
+- `src/ClaudeCodeVS/Diff/` — diff rendering + Accept/Reject InfoBar + write-back + tab registry.
+- `src/ClaudeCodeVS/Editor/` — selection service + TextViewListener MEF component + Error List reader + RDT helpers.
+- `src/ClaudeCodeVS/Hooks/` — hook installer + embedded `vs-permission-hook.ps1` + `vs-usage-hook.ps1`.
+- `src/ClaudeCodeVS/Ui/` — dockable panel (BridgeStatus state, ClaudeToolWindowControl WPF, ReasonDialog).
+- `BridgeHost.cs` — wires everything together; owns the `/permission` handler and CLI launcher.
 - `spike/` — Phase 0 standalone console harness (net8.0), kept for protocol regression testing.
 
 ## Tech stack & hard constraints
 
 - **In-proc VSIX, `net48`, VSSDK + Community Toolkit.** The differencing service, Roslyn workspace, RDT, and editor adapters are in-proc services; the out-of-process `VisualStudio.Extensibility` model can't host them. Do not propose migrating the diff core to it.
 - **WebSocket = `HttpListener`** bound to `127.0.0.1` only. No third-party WS/agent libraries.
-- **Target VS 2026 only for now** (matches where #15942 points; halves the test matrix). Pin the manifest version range to 2026; backfill VS 2022 once Phase 1 proves out — see `build-plan.md` §8.
+- **Target VS 2026 only for now** (matches where #15942 points; halves the test matrix). Pin the manifest version range to `[18.0, 19.0)`; backfill VS 2022 when demand justifies it — see `ROADMAP.md`.
 
 ## Non-negotiable conventions
 
@@ -48,45 +51,57 @@ Lockfile `~/.claude/ide/<port>.lock` (filename == port):
   "transport": "ws", "runningInWindows": true, "authToken": "<uuid>" }
 ```
 Env before launching CLI: `CLAUDE_CODE_SSE_PORT=<port>`, `ENABLE_IDE_INTEGRATION=true`.
-Full schema + all 12 tool definitions: `build-plan.md` §3–§4.
+Full schema + all 12 tool definitions: see `src/ClaudeCodeVS/Tools/` and the Tool status section below.
 
-**WS handshake (verified vs CLI 2.1.169, spike):** the upgrade request carries `Sec-WebSocket-Protocol: mcp` — **echo it in the 101 response or the CLI drops the socket before `initialize`**. MCP `protocolVersion` is `2025-11-25` (echo the client's). After `initialize`+`notifications/initialized`, the CLI sends an `ide_connected` notification `{pid}` and proactively calls `closeAllDiffTabs`. Full details: `build-plan.md` §3.
+**WS handshake (verified vs CLI 2.1.169, spike):** the upgrade request carries `Sec-WebSocket-Protocol: mcp` — **echo it in the 101 response or the CLI drops the socket before `initialize`**. MCP `protocolVersion` is `2025-11-25` (echo the client's). After `initialize`+`notifications/initialized`, the CLI sends an `ide_connected` notification `{pid}` and proactively calls `closeAllDiffTabs`. Implementation: `IdeWebSocketServer.cs` + `McpServer.cs`.
 
 ## Tool status
 
-Core 4 (the 90%): `openFile`, `openDiff`, `getCurrentSelection`, `getDiagnostics` + `selection_changed` notification.
-Parity tools (later): `getLatestSelection`, `getOpenEditors`, `getWorkspaceFolders`, `checkDocumentDirty`, `saveDocument`, `close_tab`, `closeAllDiffTabs`, `executeCode` (→ MCP error; no VS equivalent).
+All 12 tools are implemented. The CLI exposes only `getDiagnostics` + `executeCode` to the model; `openDiff`, `openFile`, `close_tab`, `closeAllDiffTabs`, and `selection_changed` are driven by the CLI internally (not model choices). The remaining awareness tools are implemented and correct but dormant in the current CLI.
 
-- [x] Phase 0 spike (console) — protocol verified end-to-end vs CLI 2.1.169 (handshake + openDiff accept/reject round-trip). See `build-plan.md` §7.
-- [ ] Phase 1 core 4 in VSIX
-- [ ] Phase 2 full parity + robustness
-- [ ] Phase 3 embedded chat (deferred)
+| Tool | Status |
+|---|---|
+| `openFile` | ✅ real |
+| `openDiff` | ✅ real — deferred TCS, InfoBar, write-back |
+| `getCurrentSelection` / `getLatestSelection` | ✅ real |
+| `getDiagnostics` | ✅ real — Error List backend (C# + C++) |
+| `getOpenEditors` / `getWorkspaceFolders` / `checkDocumentDirty` / `saveDocument` | ✅ real (RDT-backed) |
+| `close_tab` / `closeAllDiffTabs` | ✅ real (DiffRegistry) |
+| `executeCode` | ✅ MCP error (no VS equivalent) |
+| `selection_changed` notification | ✅ real — 150 ms debounce |
 
-## Diagnostics: two backends
+- [x] Phase 0 — spike: protocol verified end-to-end vs CLI 2.1.169
+- [x] Phase 1 — core 4 in VSIX
+- [x] Phase 2 — full 12-tool parity + single-gate hook + dockable panel
+- [ ] Phase 3 — VS 2022 backfill, Roslyn-precise ranges, reconnect hardening (see `ROADMAP.md`)
+- [ ] Phase 4 — embedded chat (deferred)
 
-- C#/.NET → Roslyn `VisualStudioWorkspace` (`Compilation.GetDiagnostics()`) for precise ranges.
-- C++ → Error List (`SVsErrorList`/`ErrorListProvider`); coarser but it's the primary audience (feature request #15942), so keep it solid.
-- Always return `[{uri, diagnostics: []}]` — the envelope, even when empty.
+## Diagnostics
+
+Currently both C# and C++ diagnostics come from the **Error List** (`SVsErrorList → IVsTaskList`) via `ErrorListReader.cs`. This is a single unified path that serves both languages — Roslyn pushes C# diagnostics into the Error List and the MSVC toolchain pushes C++ ones. Ranges are point ranges only (the Error List exposes one line/column per entry).
+
+Roslyn-precise C# span ranges (`VisualStudioWorkspace → Compilation.GetDiagnostics()`) are a Phase 3 enhancement — see `ROADMAP.md`. Always return `[{uri, diagnostics: []}]` — the envelope, even when empty. Requires a loaded project (the Error List is empty for loose files).
 
 ## Build / run / test
 
-> Fill in actual commands as the project takes shape.
+```powershell
+# Extension (Release)
+msbuild src/ClaudeCodeVS/ClaudeCodeVS.csproj /t:Rebuild /p:Configuration=Release
 
-```bash
-# Spike (Phase 0) — fastest protocol loop
+# Extension (Debug, then F5 in VS to launch the Experimental instance)
+msbuild src/ClaudeCodeVS/ClaudeCodeVS.csproj /t:Rebuild /p:Configuration=Debug
+
+# Spike (Phase 0) — fastest protocol loop; no VS needed
 dotnet run --project spike
-#   then in a terminal with the env vars set:  claude   ->   /ide
-
-# Extension
-msbuild ClaudeCodeVS.sln /p:Configuration=Debug   # or: dotnet build
-# F5 in VS launches the experimental instance with the VSIX loaded.
+#   then: claude (with ENABLE_IDE_INTEGRATION + CLAUDE_CODE_SSE_PORT set) -> /ide
 ```
 
 Protocol smoke test on every CLI bump (the contract is undocumented and has regressed before):
-```bash
+```powershell
 claude --version            # record the known-good version
-# launch spike, run /ide, confirm: connects, lists mcp__ide__* tools,
-# openDiff fires on an edit, accept/reject controls the outcome.
+# launch spike, connect claude, confirm: lists mcp__ide__* tools,
+# openDiff fires on an edit, accept/reject controls the outcome,
+# /permission endpoint responds to a POST with the auth token.
 ```
 
 ## Gotchas

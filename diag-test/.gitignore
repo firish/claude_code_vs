@@ -1,6 +1,0 @@
-# Diagnostics-test fixture. The extension auto-writes .claude/ on launch, and Claude creates scratch
-# files during testing — ignore all of that; keep only the fixture (the project + its CS0029 file).
-/*
-!.gitignore
-!Program.cs
-!diag-test.csproj

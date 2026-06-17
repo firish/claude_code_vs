@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Drive-test fixture for the Phase 3 debugger-driving feature. Compiles and RUNS (no compile error),
+       but produces a self-contradicting result at runtime. Unlike CheckoutBuggy/CheckoutDemo, the flaw
+       is NOT described in any comment - the point is to see whether Claude can DRIVE the debugger
+       (set breakpoints, continue, step, inspect values across iterations) to find it, rather than spot
+       it by reading. Open in VS, enable "Allow Claude to drive debugger" in the panel, then ask Claude
+       to investigate why the peak window is inconsistent with its reported sum. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

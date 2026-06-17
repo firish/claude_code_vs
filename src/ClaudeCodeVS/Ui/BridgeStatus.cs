@@ -74,6 +74,22 @@ internal static class BridgeStatus
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// Allow Claude to DRIVE the debugger (Phase 3): continue/step, run-to-line, and set/remove
+    /// breakpoints via the vs_continue/vs_step_*/vs_*_breakpoint tools. In-memory only (resets each VS
+    /// session) so model-controlled execution is never silently left on - same safety model as
+    /// <see cref="AutoAcceptEdits"/>. READS (vs_debug_state, vs_evaluate, …) are NOT gated; only
+    /// execution control and breakpoint mutation are.
+    /// </summary>
+    public static bool AllowDebuggerDrive { get; private set; }
+
+    public static void SetAllowDebuggerDrive(bool value)
+    {
+        if (AllowDebuggerDrive == value) return;
+        AllowDebuggerDrive = value;
+        Changed?.Invoke();
+    }
+
     /// <summary>Set by BridgeHost so the panel's Launch button can start the CLI.</summary>
     public static Func<Task>? LaunchAction { get; set; }
 

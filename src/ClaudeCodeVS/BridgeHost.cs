@@ -28,6 +28,7 @@ internal sealed class BridgeHost : IDisposable
     private Lockfile? _lockfile;
     private IdeWebSocketServer? _server;
     private WorkspaceWatcher? _watcher;
+    private Debugging.DebuggerDriver? _driver; // Phase 3: drives the debugger (continue/step/breakpoints)
 
     public BridgeHost(AsyncPackage package) => _package = package;
 
@@ -94,8 +95,10 @@ internal sealed class BridgeHost : IDisposable
         // served at POST /mcp. The CLI reaches it through the stdio shim that McpInstaller registers in
         // .mcp.json - so the model can fetch live runtime state on demand mid-turn, not just at
         // prompt-submit. Distinct from the IDE-protocol MCP on the WebSocket above (whose tools stay
-        // dormant); reuses the same McpServer dispatch over a different tool set.
-        _server.DebugMcp = new McpServer(new ToolRegistry(BuildDebugTools()));
+        // dormant); reuses the same McpServer dispatch over a different tool set. The driver (Phase 3)
+        // owns the IVsDebugger event subscription + the await-next-break coordination for the drive tools.
+        _driver = new Debugging.DebuggerDriver();
+        _server.DebugMcp = new McpServer(new ToolRegistry(BuildDebugTools(_driver)));
 
         // Run the accept loop in the background. If it ever faults (not a normal shutdown), delete the
         // lockfile so we don't keep advertising a dead bridge that blocks reconnection (issue #5043).
@@ -245,12 +248,21 @@ internal sealed class BridgeHost : IDisposable
     /// in a separate registry so they're real, callable MCP tools the CLI surfaces to the model - unlike
     /// the IDE-protocol tools above, which the CLI advertises but keeps dormant.
     /// </summary>
-    private static IEnumerable<IIdeTool> BuildDebugTools()
+    private static IEnumerable<IIdeTool> BuildDebugTools(Debugging.DebuggerDriver driver)
     {
+        // Phase 2 - read/pull (ungated).
         yield return new VsDebugStateTool();
         yield return new VsListBreakpointsTool();
         yield return new VsGetFrameLocalsTool();
         yield return new VsEvaluateTool();
+        // Phase 3 - drive (each gated behind BridgeStatus.AllowDebuggerDrive).
+        yield return new VsContinueTool(driver);
+        yield return new VsStepOverTool(driver);
+        yield return new VsStepIntoTool(driver);
+        yield return new VsStepOutTool(driver);
+        yield return new VsRunToLineTool(driver);
+        yield return new VsSetBreakpointTool(driver);
+        yield return new VsRemoveBreakpointTool(driver);
     }
 
     /// <summary>Best-effort workspace root for the lockfile: the open solution's directory, else none.</summary>
@@ -343,6 +355,7 @@ internal sealed class BridgeHost : IDisposable
     {
         try { _cts.Cancel(); } catch { /* shutting down */ }
         _watcher?.Dispose();
+        _driver?.Dispose(); // unadvise the IVsDebugger event sink (best-effort)
         _lockfile?.Delete();
         _cts.Dispose();
     }

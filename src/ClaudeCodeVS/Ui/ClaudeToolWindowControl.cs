@@ -42,6 +42,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly Border _pendingCard;
     private readonly TextBlock _pendingText;
     private readonly CheckBox _autoAccept;
+    private readonly CheckBox _allowDrive;
     private readonly ListBox _feed;
     private readonly DispatcherTimer _timer;
     private readonly StackPanel _costRow;
@@ -95,6 +96,20 @@ internal sealed class ClaudeToolWindowControl : UserControl
         _autoAccept.Unchecked += (s, e) => BridgeStatus.SetAutoAcceptEdits(false);
         _autoAccept.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey); // else label is black-on-dark
         left.Children.Add(_autoAccept);
+
+        // Phase 3 gate: lets Claude continue/step/set-breakpoints while paused. Default OFF, resets each
+        // session (same in-memory safety model as auto-accept) - model-controlled execution is opt-in.
+        _allowDrive = new CheckBox
+        {
+            Content = "Allow Claude to drive debugger",
+            ToolTip = "Let Claude continue/step and set breakpoints while paused. Resets when VS restarts.",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+        };
+        _allowDrive.Checked += (s, e) => BridgeStatus.SetAllowDebuggerDrive(true);
+        _allowDrive.Unchecked += (s, e) => BridgeStatus.SetAllowDebuggerDrive(false);
+        _allowDrive.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        left.Children.Add(_allowDrive);
 
         toolbar.Children.Add(right);
         toolbar.Children.Add(left);
@@ -228,6 +243,8 @@ internal sealed class ClaudeToolWindowControl : UserControl
     {
         if (_autoAccept.IsChecked != BridgeStatus.AutoAcceptEdits)
             _autoAccept.IsChecked = BridgeStatus.AutoAcceptEdits;
+        if (_allowDrive.IsChecked != BridgeStatus.AllowDebuggerDrive)
+            _allowDrive.IsChecked = BridgeStatus.AllowDebuggerDrive;
 
         // Status pill.
         if (BridgeStatus.Port is not int port)

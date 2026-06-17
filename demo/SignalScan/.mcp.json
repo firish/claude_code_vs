@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "vs-debug": {
+      "type": "stdio",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".claude/vs-mcp-shim.ps1"
+      ]
+    }
+  }
+}

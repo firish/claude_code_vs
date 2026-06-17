@@ -33,7 +33,8 @@ internal sealed class VsDebugStateTool : IIdeTool
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
         var snap = DebuggerReader.ReadSnapshot();
-        Log.Info($"vs_debug_state -> mode={(string?)snap["mode"]}");
+        var fn = (string?)snap["stoppedAt"]?["function"];
+        Log.Info($"vs_debug_state -> mode={(string?)snap["mode"]}{(fn != null ? $" @ {fn}" : "")}");
         return snap;
     }
 }
@@ -98,8 +99,11 @@ internal sealed class VsEvaluateTool : IIdeTool
     public string Description =>
         "Evaluate an expression in the Visual Studio debugger while paused, in the context of a chosen "
         + "call-stack frame (frameIndex 0 = current). Returns {value, type, isValid}. Use it to probe "
-        + "values the locals don't show (e.g. 'order.Items.Count', 'a / b'). Break-mode only. Note: "
-        + "expressions with side effects (method calls) DO execute - there is no read-only eval.";
+        + "values the locals don't show (e.g. 'order.Items.Count', 'a / b', 'object.ReferenceEquals(x, y)'). "
+        + "Break-mode only. IMPORTANT: the VS evaluator does NOT support LINQ or lambdas (e.g. "
+        + "'list.Select(x => x.Foo)' returns isValid=false) - prefer simple expressions: indexing, "
+        + "field/property access, .Count, .Sum(), arithmetic, ReferenceEquals. Note: expressions with "
+        + "side effects (method calls) DO execute - there is no read-only eval.";
 
     public JToken Schema => new JObject
     {
@@ -126,7 +130,17 @@ internal sealed class VsEvaluateTool : IIdeTool
         int frameIndex = (int?)args["frameIndex"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
         var result = DebuggerReader.Evaluate(expression, frameIndex);
-        Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> mode={(string?)result["mode"]}, valid={(bool?)result["isValid"]}");
+
+        // Log the actual result so the Output pane reads like a debug session (not just "valid=True").
+        string mode = (string?)result["mode"] ?? "?";
+        if (result["error"] != null)
+            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> mode={mode}, error={(string?)result["error"]}");
+        else
+        {
+            string val = (string?)result["value"] ?? "";
+            if (val.Length > 160) val = val.Substring(0, 160) + "…";
+            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> valid={(bool?)result["isValid"]}, value={val}");
+        }
         return result;
     }
 }

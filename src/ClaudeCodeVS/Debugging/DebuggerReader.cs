@@ -24,6 +24,8 @@ internal static class DebuggerReader
     private const int MaxValueLen = 240;     // truncate long value renderings (deep object graphs)
     private const int MaxBreakpoints = 200;  // cap breakpoints listed (a single source bp can bind to many)
     private const int EvalTimeoutMs = 5000;  // expression-evaluation timeout (GetExpression)
+    private const int MaxLogValues = 10;     // cap name=value pairs in a one-line log summary
+    private const int MaxLogValueLen = 40;   // truncate each value in that log summary
 
     /// <summary>Read a debug-state snapshot. Must be called on the UI thread.</summary>
     public static JObject ReadSnapshot()
@@ -280,6 +282,30 @@ internal static class DebuggerReader
     }
 
     private static string Truncate(string v) => v.Length > MaxValueLen ? v.Substring(0, MaxValueLen) + "…" : v;
+
+    /// <summary>
+    /// Compact "name=value, …" rendering of a snapshot's args + locals, for a single log line - so the
+    /// Output pane shows the runtime values the model is reasoning over, not just the stop location.
+    /// Pure JObject reading (no EnvDTE), so it's safe to call off the UI thread.
+    /// </summary>
+    public static string SummarizeValues(JObject snap)
+    {
+        var parts = new List<string>();
+        foreach (var key in new[] { "args", "locals" })
+        {
+            if (snap[key] is not JArray arr) continue;
+            foreach (var t in arr)
+            {
+                if (t is not JObject e) continue;
+                var name = (string?)e["name"] ?? "";
+                var val = (string?)e["value"] ?? "";
+                if (val.Length > MaxLogValueLen) val = val.Substring(0, MaxLogValueLen) + "…";
+                parts.Add($"{name}={val}");
+                if (parts.Count >= MaxLogValues) return string.Join(", ", parts) + ", …";
+            }
+        }
+        return string.Join(", ", parts);
+    }
 
     private static JArray ReadExpressions(Expressions exprs, HashSet<string>? exclude = null)
     {

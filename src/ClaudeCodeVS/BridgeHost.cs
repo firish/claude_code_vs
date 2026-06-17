@@ -263,6 +263,9 @@ internal sealed class BridgeHost : IDisposable
         yield return new VsRunToLineTool(driver);
         yield return new VsSetBreakpointTool(driver);
         yield return new VsRemoveBreakpointTool(driver);
+        // Phase 3 - session control (start = F5 to first break, stop = Shift+F5).
+        yield return new VsStartDebuggingTool(driver);
+        yield return new VsStopDebuggingTool(driver);
     }
 
     /// <summary>Best-effort workspace root for the lockfile: the open solution's directory, else none.</summary>

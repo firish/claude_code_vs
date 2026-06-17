@@ -29,6 +29,7 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
 {
     /// <summary>How long to wait for the next break before giving up and reporting "still running".</summary>
     public const int DefaultTimeoutMs = 20000; // < the shim's 60s HTTP timeout, so the POST never times out
+    public const int StartTimeoutMs = 30000;   // starting a session may include a quick build before the first break
 
     private readonly object _gate = new();
     private IVsDebugger? _debugger;
@@ -91,6 +92,53 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
             if (temp != null) { try { foreach (Breakpoint b in temp) b.Delete(); } catch { } }
             EndCommand();
         }
+    }
+
+    // ===== session control (start = F5 + await first break; stop = Shift+F5) =====
+
+    /// <summary>Start a debug session (only from design mode) and run to the first break (or completion).</summary>
+    public async Task<JObject> StartDebuggingAsync(int timeoutMs, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+        var dte = Dte();
+        if (dte?.Debugger == null) return Err("no debugger available");
+        var dbg = dte.Debugger;
+
+        dbgDebugMode mode;
+        try { mode = dbg.CurrentMode; } catch { mode = dbgDebugMode.dbgDesignMode; }
+        if (mode != dbgDebugMode.dbgDesignMode)
+            return new JObject { ["mode"] = mode == dbgDebugMode.dbgBreakMode ? "break" : "run", ["error"] = "already debugging; use vs_continue / vs_step_* or vs_stop_debugging" };
+
+        if (!BeginCommand()) return Err("a debugger drive command is already in progress");
+        try
+        {
+            EnsureAdvised();
+            var waiter = ArmWaiter();
+            // Debug.Start = F5 on the solution's startup project; returns once launched (the break comes later).
+            try { dte.ExecuteCommand("Debug.Start"); }
+            catch (Exception e) { ClearWaiter(waiter); return Err($"couldn't start debugging: {e.Message} (is a startup project set?)"); }
+            return await AwaitBreakAsync(waiter, timeoutMs, ct);
+        }
+        finally { EndCommand(); }
+    }
+
+    /// <summary>Stop the running debug session (returns to design mode). No-op if not debugging.</summary>
+    public async Task<JObject> StopDebuggingAsync(CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+        var dbg = Dte()?.Debugger;
+        if (dbg == null) return Err("no debugger available");
+
+        dbgDebugMode mode;
+        try { mode = dbg.CurrentMode; } catch { mode = dbgDebugMode.dbgDesignMode; }
+        if (mode == dbgDebugMode.dbgDesignMode)
+            return new JObject { ["mode"] = "design", ["note"] = "not currently debugging" };
+
+        try { dbg.Stop(false); }
+        catch (Exception e) { return Err($"stop failed: {e.Message}"); }
+        return new JObject { ["ok"] = true, ["mode"] = "design", ["note"] = "debugging stopped" };
     }
 
     // ===== breakpoint mutation (synchronous; no break to await) =====

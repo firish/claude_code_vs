@@ -34,7 +34,8 @@ internal sealed class VsDebugStateTool : IIdeTool
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
         var snap = DebuggerReader.ReadSnapshot();
         var fn = (string?)snap["stoppedAt"]?["function"];
-        Log.Info($"vs_debug_state -> mode={(string?)snap["mode"]}{(fn != null ? $" @ {fn}" : "")}");
+        var vals = DebuggerReader.SummarizeValues(snap);
+        Log.Info($"vs_debug_state -> mode={(string?)snap["mode"]}{(fn != null ? $" @ {fn}" : "")}{(vals.Length > 0 ? $" · {vals}" : "")}");
         return snap;
     }
 }
@@ -87,7 +88,9 @@ internal sealed class VsGetFrameLocalsTool : IIdeTool
         int frameIndex = (int?)args["frameIndex"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
         var result = DebuggerReader.ReadFrameLocals(frameIndex);
-        Log.Info($"vs_get_frame_locals(frame={frameIndex}) -> mode={(string?)result["mode"]}");
+        var fn = (string?)result["function"];
+        var vals = DebuggerReader.SummarizeValues(result);
+        Log.Info($"vs_get_frame_locals(frame={frameIndex}) -> mode={(string?)result["mode"]}{(fn != null ? $" @ {fn}" : "")}{(vals.Length > 0 ? $" · {vals}" : "")}");
         return result;
     }
 }

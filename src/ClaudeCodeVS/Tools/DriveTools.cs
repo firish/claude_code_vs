@@ -50,7 +50,9 @@ internal abstract class DriveToolBase : IIdeTool
         {
             var fn = (string?)r["stoppedAt"]?["function"];
             var line = r["stoppedAt"]?["line"];
-            return fn != null ? $"break @ {fn}:{line}" : "break";
+            var head = fn != null ? $"break @ {fn}:{line}" : "break";
+            var vals = DebuggerReader.SummarizeValues(r); // show the locals the model now sees
+            return vals.Length > 0 ? $"{head} · {vals}" : head;
         }
         if (mode != null)
             return r["note"] != null ? $"{mode} ({(string?)r["note"]})" : mode;
@@ -161,4 +163,25 @@ internal sealed class VsRemoveBreakpointTool : DriveToolBase
     };
     protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
         => Driver.RemoveBreakpointAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, ct);
+}
+
+internal sealed class VsStartDebuggingTool : DriveToolBase
+{
+    public VsStartDebuggingTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_start_debugging";
+    public override string Description =>
+        "Start a debugging session (F5) and run to the first breakpoint, returning the new state. Set a "
+        + "breakpoint first (vs_set_breakpoint) or the program runs to completion. Use when NOT already "
+        + "debugging (design mode); driving enabled.";
+    public override JToken Schema => NoArgs();
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct) => Driver.StartDebuggingAsync(DebuggerDriver.StartTimeoutMs, ct);
+}
+
+internal sealed class VsStopDebuggingTool : DriveToolBase
+{
+    public VsStopDebuggingTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_stop_debugging";
+    public override string Description => "Stop the current debugging session (Shift+F5), returning to design mode. Driving enabled.";
+    public override JToken Schema => NoArgs();
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct) => Driver.StopDebuggingAsync(ct);
 }

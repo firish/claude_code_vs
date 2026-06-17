@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Drive-test fixture #2 for the Phase 3 debugger-driving feature, aimed at STEPPING. Compiles and
+       RUNS but prints a wrong score. Unlike SignalScan (whose aliasing bug is confirmable at one paused
+       point with a single ReferenceEquals), this flaw is a missing state transition that only shows up
+       when you watch a variable evolve across iterations - i.e. it forces stepping and/or a conditional
+       breakpoint, not just inspection. No comment describes the flaw. Open in VS, enable "Allow Claude
+       to drive debugger", and ask Claude to find why the score is off by stepping through the loop. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

@@ -139,11 +139,57 @@ internal sealed class VsSetBreakpointTool : DriveToolBase
             ["file"] = Prop("string", "Absolute path of the file."),
             ["line"] = Prop("integer", "1-based line number for the breakpoint."),
             ["condition"] = Prop("string", "Optional break-when-true condition in the debugged language."),
+            ["hitCount"] = Prop("integer", "Optional: only break on a hit count, e.g. 5 to catch the 5th iteration."),
+            ["hitCountType"] = Prop("string", "How to apply hitCount: 'equal' (==N, default), 'atLeast' (>=N), or 'multiple' (every Nth)."),
         },
         ["required"] = new JArray("file", "line"),
     };
     protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
-        => Driver.SetBreakpointAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, (string?)a["condition"], ct);
+        => Driver.SetBreakpointAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, (string?)a["condition"],
+            (int?)a["hitCount"] ?? 0, (string?)a["hitCountType"], ct);
+}
+
+internal sealed class VsFreezeThreadTool : DriveToolBase
+{
+    public VsFreezeThreadTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_freeze_thread";
+    public override string Description =>
+        "Freeze (suspend) or thaw a thread by its id while paused, so it stays put / resumes when you "
+        + "continue. Get ids from vs_threads. Useful for isolating one thread in a race. Driving enabled.";
+    public override JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["threadId"] = Prop("integer", "Thread id (from vs_threads)."),
+            ["frozen"] = new JObject { ["type"] = "boolean", ["description"] = "true = freeze (default), false = thaw." },
+        },
+        ["required"] = new JArray("threadId"),
+    };
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
+        => Driver.FreezeThreadAsync((int?)a["threadId"] ?? -1, (bool?)a["frozen"] ?? true, ct);
+}
+
+internal sealed class VsSetNextStatementTool : DriveToolBase
+{
+    public VsSetNextStatementTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_set_next_statement";
+    public override string Description =>
+        "Move the execution pointer to a line WITHOUT running the code in between (re-run a line, or skip "
+        + "ahead), then return the new state. Only valid within the CURRENT method. Powerful but risky - "
+        + "skipping initialization can corrupt state. Paused + driving enabled.";
+    public override JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["file"] = Prop("string", "Absolute path of the file (normally the current one)."),
+            ["line"] = Prop("integer", "1-based line to move the execution pointer to."),
+        },
+        ["required"] = new JArray("file", "line"),
+    };
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
+        => Driver.SetNextStatementAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, ct);
 }
 
 internal sealed class VsRemoveBreakpointTool : DriveToolBase

@@ -26,6 +26,10 @@ internal static class DebuggerReader
     private const int EvalTimeoutMs = 5000;  // expression-evaluation timeout (GetExpression)
     private const int MaxLogValues = 10;     // cap name=value pairs in a one-line log summary
     private const int MaxLogValueLen = 40;   // truncate each value in that log summary
+    private const int MaxExpandDepth = 3;     // cap recursion when expanding an object graph
+    private const int MaxExpandChildren = 40; // cap child members rendered per level
+    private const int MaxThreads = 60;        // cap threads listed
+    private const int MaxThreadFrames = 12;   // cap call-stack depth reported per thread
 
     /// <summary>Read a debug-state snapshot. Must be called on the UI thread.</summary>
     public static JObject ReadSnapshot()
@@ -218,6 +222,137 @@ internal static class DebuggerReader
                     ["hitCount"] = hits,
                 };
                 if (!string.IsNullOrEmpty(condition)) o["condition"] = condition;
+                arr.Add(o);
+            }
+        }
+        catch (Exception e) { result["error"] = e.Message; }
+        return result;
+    }
+
+    /// <summary>
+    /// Expand an expression's object graph: evaluate it, then recurse into its child members
+    /// (<see cref="Expression.DataMembers"/>) down to <paramref name="depth"/> levels. Lets the model
+    /// drill into a complex object without guessing every member path. Break-mode only; depth/breadth capped.
+    /// </summary>
+    public static JObject Expand(string expression, int frameIndex, int depth)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var dbg = (ServiceProvider.GlobalProvider.GetService(typeof(SDTE)) as DTE)?.Debugger;
+        if (dbg == null) return Mode("unknown");
+        if (!TryBreakMode(dbg, out var notBreak)) return notBreak;
+        if (string.IsNullOrWhiteSpace(expression))
+            return new JObject { ["mode"] = "break", ["error"] = "empty expression" };
+
+        StackFrame? prev = null;
+        bool switched = false;
+        try
+        {
+            if (frameIndex > 0)
+            {
+                var target = FrameAt(dbg, frameIndex);
+                if (target != null) { prev = dbg.CurrentStackFrame; dbg.CurrentStackFrame = target; switched = true; }
+            }
+
+            var ex = dbg.GetExpression(expression, true, EvalTimeoutMs);
+            var node = ExpandExpression(ex, Math.Min(Math.Max(depth, 0), MaxExpandDepth));
+            node["mode"] = "break";
+            node["expression"] = expression;
+            node["frameIndex"] = frameIndex;
+            return node;
+        }
+        catch (Exception e)
+        {
+            return new JObject { ["mode"] = "break", ["expression"] = expression, ["error"] = e.Message };
+        }
+        finally
+        {
+            if (switched && prev != null) { try { dbg.CurrentStackFrame = prev; } catch { } }
+        }
+    }
+
+    private static JObject ExpandExpression(Expression ex, int depth)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var node = new JObject();
+        string name = "", type = "", value = "";
+        try { name = ex.Name ?? ""; } catch { }
+        try { type = ex.Type ?? ""; } catch { }
+        try { value = ex.Value ?? ""; } catch { }
+        node["name"] = name;
+        node["type"] = type;
+        node["value"] = Truncate(value);
+
+        if (depth <= 0) return node;
+
+        Expressions? members = null;
+        try { members = ex.DataMembers; } catch { }
+        int count = 0;
+        try { count = members?.Count ?? 0; } catch { }
+        if (members == null || count == 0) return node;
+
+        var kids = new JArray();
+        int n = 0;
+        foreach (Expression child in members)
+        {
+            if (n++ >= MaxExpandChildren)
+            {
+                kids.Add(new JObject { ["name"] = "…", ["value"] = $"({count - MaxExpandChildren} more members)" });
+                break;
+            }
+            kids.Add(ExpandExpression(child, depth - 1));
+        }
+        node["children"] = kids;
+        return node;
+    }
+
+    /// <summary>
+    /// List ALL threads of the debuggee (not just the current one), each with its call stack (function
+    /// names), suspended state, and location. The tool for deadlocks/races. Break-mode only. NOTE: EnvDTE
+    /// gives per-thread stacks + suspended state, but NOT lock/wait-chain ownership ("blocked on what").
+    /// </summary>
+    public static JObject ReadThreads()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var dbg = (ServiceProvider.GlobalProvider.GetService(typeof(SDTE)) as DTE)?.Debugger;
+        var result = new JObject { ["mode"] = "unknown", ["threads"] = new JArray() };
+        if (dbg == null) return result;
+        result["mode"] = ModeString(dbg);
+
+        try
+        {
+            var program = dbg.CurrentProgram;
+            if (program == null) return result;
+
+            int current = -1;
+            try { current = dbg.CurrentThread?.ID ?? -1; } catch { }
+
+            var arr = (JArray)result["threads"]!;
+            int tn = 0;
+            foreach (EnvDTE.Thread th in program.Threads)
+            {
+                if (tn++ >= MaxThreads) break;
+                var o = new JObject();
+                int id = -1;
+                try { id = th.ID; } catch { }
+                o["id"] = id;
+                if (id == current) o["current"] = true;
+                try { o["name"] = th.Name ?? ""; } catch { }
+                try { o["location"] = th.Location ?? ""; } catch { }
+
+                var frames = new JArray();
+                try
+                {
+                    int fn = 0;
+                    foreach (StackFrame f in th.StackFrames)
+                    {
+                        if (fn++ >= MaxThreadFrames) break;
+                        frames.Add(SafeFunction(f));
+                    }
+                }
+                catch { }
+                o["stack"] = frames;
                 arr.Add(o);
             }
         }

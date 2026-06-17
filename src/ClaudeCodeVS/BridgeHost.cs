@@ -255,6 +255,8 @@ internal sealed class BridgeHost : IDisposable
         yield return new VsListBreakpointsTool();
         yield return new VsGetFrameLocalsTool();
         yield return new VsEvaluateTool();
+        yield return new VsExpandTool();    // object-graph expansion
+        yield return new VsThreadsTool();   // all threads + stacks
         // Phase 3 - drive (each gated behind BridgeStatus.AllowDebuggerDrive).
         yield return new VsContinueTool(driver);
         yield return new VsStepOverTool(driver);
@@ -263,6 +265,8 @@ internal sealed class BridgeHost : IDisposable
         yield return new VsRunToLineTool(driver);
         yield return new VsSetBreakpointTool(driver);
         yield return new VsRemoveBreakpointTool(driver);
+        yield return new VsFreezeThreadTool(driver);      // freeze/thaw a thread
+        yield return new VsSetNextStatementTool(driver);  // move the execution pointer
         // Phase 3 - session control (start = F5 to first break, stop = Shift+F5).
         yield return new VsStartDebuggingTool(driver);
         yield return new VsStopDebuggingTool(driver);

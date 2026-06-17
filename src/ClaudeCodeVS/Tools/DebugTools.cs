@@ -147,3 +147,59 @@ internal sealed class VsEvaluateTool : IIdeTool
         return result;
     }
 }
+
+/// <summary>vs_expand - drill into an object's child members (Expression.DataMembers) to a depth.</summary>
+internal sealed class VsExpandTool : IIdeTool
+{
+    public string Name => "vs_expand";
+    public string Description =>
+        "Expand an object's structure while paused: evaluate an expression and recurse into its child "
+        + "members (fields/properties/elements) to a depth, returning a tree of {name,type,value,children}. "
+        + "Use this to inspect a complex object without guessing every member path (e.g. expand 'order' "
+        + "instead of evaluating 'order.Customer.Address.City' blind). Break-mode only.";
+
+    public JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["expression"] = new JObject { ["type"] = "string", ["description"] = "Expression to expand (e.g. 'order', 'this', 'items[0]')." },
+            ["depth"] = new JObject { ["type"] = "integer", ["description"] = "Levels of children to expand, 1-3 (default 2)." },
+            ["frameIndex"] = new JObject { ["type"] = "integer", ["description"] = "Frame to evaluate in, 0 = current (default 0)." },
+        },
+        ["required"] = new JArray("expression"),
+    };
+
+    public async Task<object> InvokeAsync(JToken args, CancellationToken ct)
+    {
+        string expression = (string?)args["expression"] ?? "";
+        int depth = (int?)args["depth"] ?? 2;
+        int frameIndex = (int?)args["frameIndex"] ?? 0;
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var result = DebuggerReader.Expand(expression, frameIndex, depth);
+        int kids = (result["children"] as JArray)?.Count ?? 0;
+        Log.Info($"vs_expand('{expression}', depth={depth}) -> {(string?)result["mode"]}, {kids} child(ren)");
+        return result;
+    }
+}
+
+/// <summary>vs_threads - all threads + their stacks (deadlock/race investigation).</summary>
+internal sealed class VsThreadsTool : IIdeTool
+{
+    public string Name => "vs_threads";
+    public string Description =>
+        "List ALL threads of the debugged process while paused, each with its call stack (function names), "
+        + "suspended state, and location. Use for deadlocks and races. Returns {mode, threads:[...]}. "
+        + "(EnvDTE gives per-thread stacks but not lock/wait-chain ownership.) Break-mode only.";
+
+    public JToken Schema => new JObject { ["type"] = "object", ["properties"] = new JObject() };
+
+    public async Task<object> InvokeAsync(JToken args, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var result = DebuggerReader.ReadThreads();
+        int n = (result["threads"] as JArray)?.Count ?? 0;
+        Log.Info($"vs_threads -> mode={(string?)result["mode"]}, {n} thread(s)");
+        return result;
+    }
+}

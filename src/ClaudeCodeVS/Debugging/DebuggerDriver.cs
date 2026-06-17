@@ -143,7 +143,7 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
 
     // ===== breakpoint mutation (synchronous; no break to await) =====
 
-    public async Task<JObject> SetBreakpointAsync(string file, int line, string? condition, CancellationToken ct)
+    public async Task<JObject> SetBreakpointAsync(string file, int line, string? condition, int hitCount, string? hitCountType, CancellationToken ct)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
         var dbg = Dte()?.Debugger;
@@ -152,16 +152,87 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
 
         try
         {
-            Breakpoints added = string.IsNullOrEmpty(condition)
-                ? dbg.Breakpoints.Add(File: file, Line: line)
-                : dbg.Breakpoints.Add(File: file, Line: line, Condition: condition);
+            Breakpoints added;
+            if (hitCount > 0)
+            {
+                var hct = MapHitCountType(hitCountType);
+                added = string.IsNullOrEmpty(condition)
+                    ? dbg.Breakpoints.Add(File: file, Line: line, HitCount: hitCount, HitCountType: hct)
+                    : dbg.Breakpoints.Add(File: file, Line: line, Condition: condition, HitCount: hitCount, HitCountType: hct);
+            }
+            else
+            {
+                added = string.IsNullOrEmpty(condition)
+                    ? dbg.Breakpoints.Add(File: file, Line: line)
+                    : dbg.Breakpoints.Add(File: file, Line: line, Condition: condition);
+            }
 
             int bound = 0; try { bound = added.Count; } catch { }
             var result = new JObject { ["ok"] = true, ["file"] = file, ["line"] = line, ["bound"] = bound };
             if (!string.IsNullOrEmpty(condition)) result["condition"] = condition;
+            if (hitCount > 0) { result["hitCount"] = hitCount; result["hitCountType"] = string.IsNullOrEmpty(hitCountType) ? "equal" : hitCountType; }
             return result;
         }
         catch (Exception e) { return Err($"set breakpoint failed: {e.Message}"); }
+    }
+
+    private static dbgHitCountType MapHitCountType(string? t) => (t ?? "equal").Trim().ToLowerInvariant() switch
+    {
+        "atleast" or "greaterorequal" or ">=" => dbgHitCountType.dbgHitCountTypeGreaterOrEqual,
+        "multiple" or "everynth" => dbgHitCountType.dbgHitCountTypeMultiple,
+        _ => dbgHitCountType.dbgHitCountTypeEqual,
+    };
+
+    /// <summary>Freeze (suspend) or thaw a thread by id - isolate one thread in a race. Break-mode only.</summary>
+    public async Task<JObject> FreezeThreadAsync(int threadId, bool freeze, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var dbg = Dte()?.Debugger;
+        if (dbg == null) return Err("no debugger available");
+        if (!IsBreak(dbg)) return NotPaused(dbg);
+
+        try
+        {
+            var program = dbg.CurrentProgram;
+            if (program == null) return Err("no running program");
+            foreach (EnvDTE.Thread th in program.Threads) // qualify: System.Threading.Thread is also in scope
+            {
+                int id = -1; try { id = th.ID; } catch { }
+                if (id != threadId) continue;
+                if (freeze) th.Freeze(); else th.Thaw();
+                return new JObject { ["ok"] = true, ["threadId"] = threadId, ["frozen"] = freeze };
+            }
+            return Err($"no thread with id {threadId}");
+        }
+        catch (Exception e) { return Err($"freeze/thaw failed: {e.Message}"); }
+    }
+
+    /// <summary>
+    /// Move the execution pointer to file:line without running the intervening code. No direct API - we
+    /// position the editor caret then issue the Debug.SetNextStatement command (which acts on the caret).
+    /// Only valid within the current method; stays paused (no await needed). Break-mode only.
+    /// </summary>
+    public async Task<JObject> SetNextStatementAsync(string file, int line, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var dte = Dte();
+        if (dte?.Debugger == null) return Err("no debugger available");
+        if (!IsBreak(dte.Debugger)) return NotPaused(dte.Debugger);
+        if (string.IsNullOrWhiteSpace(file) || line <= 0) return Err("file and a positive line are required");
+
+        try
+        {
+            var window = dte.ItemOperations.OpenFile(file);
+            window?.Activate();
+            if (dte.ActiveDocument?.Selection is TextSelection sel)
+                sel.MoveToLineAndOffset(line, 1, false);
+            dte.ExecuteCommand("Debug.SetNextStatement");
+            return DebuggerReader.ReadSnapshot();
+        }
+        catch (Exception e)
+        {
+            return Err($"set next statement failed: {e.Message} (only valid within the current method)");
+        }
     }
 
     public async Task<JObject> RemoveBreakpointAsync(string file, int line, CancellationToken ct)

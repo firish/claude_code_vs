@@ -18,9 +18,27 @@ Claude Code has first-class IDE integration for VS Code and JetBrains, but not V
 - **Reject with feedback** - reject an edit and tell Claude what to change; it reconsiders with your note.
 - **Run wild (auto-accept)** - a panel toggle to apply edits without opening the diff, for when you want to let it cook. Resets each session.
 - **Diagnostics sharing** - Claude reads Visual Studio's compiler errors/warnings (C# and C++) and fixes them.
-- **Live debugger** - while you're paused at a breakpoint, Claude sees your program's runtime state — call stack, variable values, threads — and, opt-in, can *drive* the debugger (continue, step, set breakpoints, start/stop a session) to corner a bug instead of guessing from source. Full reference: **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
+- **Live debugger** - while you're paused at a breakpoint, Claude sees your program's runtime state (call stack, variable values, threads) and, opt-in, can *drive* the debugger (continue, step, set breakpoints, start/stop a session) to corner a bug instead of guessing from source. Full reference: **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
 - **Selection context** - Claude automatically knows the file and lines you're looking at.
 - **Live panel** - a dockable *Claude Code* panel: connection status, edit decisions, and **token usage + estimated cost** (latest call vs cumulative session).
+
+## Watch it debug
+
+The headline of 1.2.0. Pause at a breakpoint, ask Claude what's wrong, and with driving turned on it sets breakpoints, steps through your code, and reads the runtime values to catch bugs that never show up in the output.
+
+Here it is on a scoring function that returns the wrong total. It stopped inside the loop and stepped through the rounds, watching a counter that should reset but didn't:
+
+![Claude paused in the Visual Studio debugger, reading live values](https://raw.githubusercontent.com/firish/claude_code_vs/main/docs/images/combo-debugger.png)
+
+It kept a running trace of what it saw, which is how it cornered the bug:
+
+![The runtime trace Claude built while stepping](https://raw.githubusercontent.com/firish/claude_code_vs/main/docs/images/combo-trace.png)
+
+Then the fix opened in the native diff, ready to accept or reject:
+
+![Claude's fix in the Visual Studio diff viewer](https://raw.githubusercontent.com/firish/claude_code_vs/main/docs/images/combo-diff-viewer.png)
+
+Full walkthrough, the complete tool list, and the limitations are in **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
 
 ## Requirements
 
@@ -42,6 +60,8 @@ Claude Code has first-class IDE integration for VS Code and JetBrains, but not V
 
 > Diagnostics need a **loaded project** (not a loose file in Open-Folder mode) for the compiler to analyze it.
 
+> To let Claude debug: set a breakpoint, tick **Allow Claude to drive debugger** in the panel, start debugging, then ask it to investigate. Reading runtime state works without the toggle; the toggle only gates *driving* execution. See [`docs/DEBUGGER.md`](docs/DEBUGGER.md).
+
 ## How it works
 
 This is a **protocol bridge**, not a re-implementation of the agent. On launch the extension:
@@ -61,13 +81,16 @@ For **debugger access**, it adds a `UserPromptSubmit` hook (injects live break s
 - On **Launch**, it writes these into your workspace's `.claude/` folder and merges hook entries into `.claude/settings.json` (preserving existing content):
   - `vs-permission-hook.ps1` - routes Edit/Write/MultiEdit edits through the VS diff.
   - `vs-usage-hook.ps1` - reports the transcript path so the panel can show token stats.
+  - `vs-debug-context-hook.ps1` - injects live break state into your prompt while you're paused (a `UserPromptSubmit` hook).
+  - `vs-mcp-shim.ps1` - a stdio bridge for the `vs-debug` MCP server, which it registers in your workspace `.mcp.json`.
 - **Token cost is an estimate** (hardcoded per-tier prices), shown only when you click *Show est. cost*.
 
 ## Limitations & known issues
 
 - **Visual Studio 2026 only** for now (a VS 2022 backfill is planned if there's demand).
-- The IDE-integration protocol is **undocumented and version-fragile** - a `claude` update could change it. Known-good: 2.1.173.
+- The IDE-integration protocol is **undocumented and version-fragile** - a `claude` update could change it. Known-good: 2.1.181.
 - **Diagnostics need a loaded project** (the Error List / Roslyn won't analyze loose files).
+- **Debugger features target managed (.NET) code.** Reading runtime state is always on; driving execution is opt-in. Native/C++ runtime inspection isn't covered.
 - Token stats refresh **on edits** (the reliable hook trigger), so a chat-only turn may not update them immediately.
 - Cost figures are **estimates**, not billing.
 

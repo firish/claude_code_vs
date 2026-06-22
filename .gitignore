@@ -17,3 +17,10 @@ obj/
 
 # Logs / temp
 *.log
+
+# Local development
+.local/
+publish/
+
+# Specific files
+/docs/debugger.gif

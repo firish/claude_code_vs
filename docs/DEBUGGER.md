@@ -46,6 +46,27 @@ Nothing in the source *reads* as wrong — the flaw only surfaces when you watch
 
 ---
 
+## Cornering a deadlock: LockJam
+
+The case `vs_break_all` exists for: a **hung** program. In the [`demo/LockJam`](../demo/LockJam) fixture, five threads run against three accounts and three of them deadlock in a ring, so the process hangs forever. A deadlocked thread never *hits* a breakpoint — there's nothing to stop on, and stepping/continuing is useless. A *fresh* `claude` session was pointed at the running fixture and told only: *"the app is hung — pause it and tell me which threads are deadlocked and on what."* It drove:
+
+- **`vs_start_debugging`** → the program runs and hangs (no break in 30 s — the deadlock signature).
+- **`vs_break_all`** → pauses the hung process. The *only* way in.
+- **`vs_threads`** → each stuck thread comes back with `waiting`, `waitOn: "lock"`, and a **`lockOwnerThreadId`** — parsed from the engine's `[Waiting on lock owned by Thread 0x…]` annotation. Those owner ids *are* the wait-chain.
+- **`vs_evaluate('from.Id' / 'to.Id', threadId: …)`** on each stuck thread → exactly which account it holds vs. which it's blocked acquiring.
+
+The cycle it reconstructed — straight from the tools, no source-guessing:
+
+| Thread | holds | blocked acquiring | `lockOwnerThreadId` → |
+|---|---|---|---|
+| `xfer A→B` | A | B | `xfer B→C` |
+| `xfer B→C` | B | C | `xfer C→A` |
+| `xfer C→A` | C | A | `xfer A→B` |
+
+A clean `A → B → C → A` ring. It also correctly **excluded** the decoys — a CPU-spinning thread (running, never waiting) and one parked on an empty semaphore (`Monitor.Wait`, but not in the cycle) — and named the fix: a consistent global lock order. The lock-ownership chain that pins the cycle comes from `vs_threads` itself; the per-thread `vs_evaluate` reads the accounts. Nothing here is inferable from the source — only from the frozen runtime state.
+
+---
+
 ## How it reaches the model: three channels
 
 A new IDE tool wouldn't help here. Claude Code's IDE-integration protocol (the WebSocket the CLI connects to) is **CLI-curated** — it surfaces only `getDiagnostics` (+ `executeCode`) to the model and drives the rest itself, so a 13th tool added there would never be called. Debug state therefore reaches the model through the two channels that *do*: a **hook** (push) and a **user MCP server** (pull). Driving rides the same MCP server behind a safety gate.

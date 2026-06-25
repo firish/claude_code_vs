@@ -12,7 +12,7 @@ Deadlock-triage follow-ups to the 1.3.0 debugger surface — all pure EnvDTE, no
 
 ### Notes
 
-- **23** `vs-debug` tools total (8 read, ungated + 15 drive, gated).
+- **23** `vs-debug` tools total (8 read, ungated + 15 drive, gated). Tested against `claude` 2.1.191.
 - New fixtures: **`demo/LockJam`** (five threads, a 3-node deadlock cycle buried in noise — a busy thread and an idle semaphore-waiter as negative controls) and **`demo/AsyncTrace`** (cross-await inspection: locals/`vs_evaluate` on an async continuation, and characterizing how much of the logical async call stack surfaces).
 - **Live-verified on LockJam (Windows VS 2026):** `vs_break_all` paused the hang, `lockOwnerThreadId` formed the cycle, and per-thread `vs_evaluate('from.Id', threadId:…)` read each account — a fully tool-grounded deadlock diagnosis. Finding: a contended lock does **not** surface a `Monitor.Enter` frame (Just-My-Code or not) — Concord replaces it with the `[Waiting on lock owned by Thread]` annotation, which the heuristic now matches.
 

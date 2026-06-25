@@ -165,7 +165,7 @@ internal static class DebuggerReader
     /// Read-only inspection (the model can probe values mid-investigation). Break-mode only. Note that
     /// expressions with side effects (method calls) DO execute - EnvDTE has no read-only eval flag.
     /// </summary>
-    public static JObject Evaluate(string expression, int frameIndex)
+    public static JObject Evaluate(string expression, int frameIndex, int threadId = 0)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -175,10 +175,24 @@ internal static class DebuggerReader
         if (string.IsNullOrWhiteSpace(expression))
             return new JObject { ["mode"] = "break", ["error"] = "empty expression" };
 
+        EnvDTE.Thread? prevThread = null; bool threadSwitched = false;
         StackFrame? prev = null;
         bool switched = false;
         try
         {
+            // To evaluate in ANOTHER thread's context (e.g. read `from.Id` on each thread in a deadlock),
+            // make it current first - GetExpression and FrameAt both work off the current thread. Restored in
+            // finally, same switch-and-restore as ReadFrameLocals.
+            if (threadId > 0)
+            {
+                var targetThread = FindThread(dbg, threadId);
+                if (targetThread == null)
+                    return new JObject { ["mode"] = "break", ["expression"] = expression, ["error"] = $"no thread with id {threadId}" };
+                try { prevThread = dbg.CurrentThread; } catch { }
+                dbg.CurrentThread = targetThread;
+                threadSwitched = true;
+            }
+
             // GetExpression evaluates relative to dbg.CurrentStackFrame, so temporarily retarget it when
             // a non-current frame is requested, then restore so the user's debugger UI is undisturbed.
             if (frameIndex > 0)
@@ -198,7 +212,7 @@ internal static class DebuggerReader
             try { isValid = ex.IsValidValue; } catch { }
             try { type = ex.Type ?? ""; } catch { }
             try { value = ex.Value ?? ""; } catch { }
-            return new JObject
+            var result = new JObject
             {
                 ["mode"] = "break",
                 ["expression"] = expression,
@@ -207,6 +221,8 @@ internal static class DebuggerReader
                 ["type"] = type,
                 ["value"] = Truncate(value),
             };
+            if (threadId > 0) result["threadId"] = threadId;
+            return result;
         }
         catch (Exception e)
         {
@@ -215,6 +231,7 @@ internal static class DebuggerReader
         finally
         {
             if (switched && prev != null) { try { dbg.CurrentStackFrame = prev; } catch { } }
+            if (threadSwitched && prevThread != null) { try { dbg.CurrentThread = prevThread; } catch { } }
         }
     }
 
@@ -272,7 +289,7 @@ internal static class DebuggerReader
     /// (<see cref="Expression.DataMembers"/>) down to <paramref name="depth"/> levels. Lets the model
     /// drill into a complex object without guessing every member path. Break-mode only; depth/breadth capped.
     /// </summary>
-    public static JObject Expand(string expression, int frameIndex, int depth)
+    public static JObject Expand(string expression, int frameIndex, int depth, int threadId = 0)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -282,10 +299,23 @@ internal static class DebuggerReader
         if (string.IsNullOrWhiteSpace(expression))
             return new JObject { ["mode"] = "break", ["error"] = "empty expression" };
 
+        EnvDTE.Thread? prevThread = null; bool threadSwitched = false;
         StackFrame? prev = null;
         bool switched = false;
         try
         {
+            // Expand in ANOTHER thread's context (e.g. drill `from` on each thread in a deadlock): make it
+            // current first, restore in finally (same switch-and-restore as ReadFrameLocals / Evaluate).
+            if (threadId > 0)
+            {
+                var targetThread = FindThread(dbg, threadId);
+                if (targetThread == null)
+                    return new JObject { ["mode"] = "break", ["expression"] = expression, ["error"] = $"no thread with id {threadId}" };
+                try { prevThread = dbg.CurrentThread; } catch { }
+                dbg.CurrentThread = targetThread;
+                threadSwitched = true;
+            }
+
             if (frameIndex > 0)
             {
                 var target = FrameAt(dbg, frameIndex);
@@ -297,6 +327,7 @@ internal static class DebuggerReader
             node["mode"] = "break";
             node["expression"] = expression;
             node["frameIndex"] = frameIndex;
+            if (threadId > 0) node["threadId"] = threadId;
             return node;
         }
         catch (Exception e)
@@ -306,6 +337,7 @@ internal static class DebuggerReader
         finally
         {
             if (switched && prev != null) { try { dbg.CurrentStackFrame = prev; } catch { } }
+            if (threadSwitched && prevThread != null) { try { dbg.CurrentThread = prevThread; } catch { } }
         }
     }
 
@@ -346,8 +378,9 @@ internal static class DebuggerReader
 
     /// <summary>
     /// List ALL threads of the debuggee (not just the current one), each with its call stack (function
-    /// names), suspended state, and location. The tool for deadlocks/races. Break-mode only. NOTE: EnvDTE
-    /// gives per-thread stacks + suspended state, but NOT lock/wait-chain ownership ("blocked on what").
+    /// names) and location, plus a wait/lock flag. The tool for deadlocks/races. Break-mode only. For a
+    /// CONTENDED lock the Concord engine annotates the stack with the owning thread, which we surface as
+    /// lockOwnerThreadId - so a deadlock cycle is followable thread-to-thread (id -> lockOwnerThreadId).
     /// </summary>
     public static JObject ReadThreads()
     {
@@ -393,10 +426,11 @@ internal static class DebuggerReader
                 }
                 catch { }
                 o["stack"] = frames;
-                // Cheap deadlock/contention triage: flag threads whose top frames look like a lock/wait.
-                // Heuristic only - EnvDTE can't give true lock ownership (see vs_threads notes).
-                var waitOn = WaitHint(frames);
-                if (waitOn != null) { o["waiting"] = true; o["waitOn"] = waitOn; }
+                // Deadlock/contention triage: flag threads parked on a lock/wait. A CONTENDED lock shows up as
+                // Concord's synthetic "[Waiting on lock owned by Thread 0x..]" annotation frame (NOT a
+                // Monitor.Enter BCL frame), which also names the owner - we match it and surface that owner so a
+                // deadlock cycle is readable straight from the flags. Other waits match the BCL markers.
+                ApplyWaitFlags(o, frames);
                 arr.Add(o);
             }
         }
@@ -678,22 +712,73 @@ internal static class DebuggerReader
     };
 
     /// <summary>
-    /// Heuristic: does this thread's top-of-stack look like it's parked on a lock/wait? Pure string match on
-    /// the already-read frame names - points the model at deadlock/contention suspects. NOT authoritative
-    /// (EnvDTE can't give true lock ownership); it just flags "this thread is blocked on something".
+    /// Flag a thread parked on a lock/wait by string-matching its top few (already-read) frame names. A
+    /// contended lock is the important case and the trickiest: the Concord engine leaves no Monitor.Enter
+    /// BCL frame, it injects a synthetic "[Waiting on lock owned by Thread 0xNNN, ...]" frame above the user
+    /// method, which ALSO names the lock owner. We match that first and surface the owner as
+    /// <c>lockOwnerThreadId</c> (decimal, so it cross-references another thread's <c>id</c> in this same list
+    /// - follow the chain and you have the deadlock cycle). Other waits match the BCL markers. Heuristic, not
+    /// authoritative, but it points the model straight at the suspects.
     /// </summary>
-    private static string? WaitHint(JArray frames)
+    private static void ApplyWaitFlags(JObject o, JArray frames)
     {
+        string? lockWaitFrame = null;
+        bool deadlock = false;
+        string? marker = null;
+
         int n = 0;
         foreach (var f in frames)
         {
             if (n++ >= 3) break; // only the top few frames
             if (f?.Type != JTokenType.String) continue;
             var s = (string?)f ?? "";
-            foreach (var m in WaitMarkers)
-                if (s.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) return m.Trim('.');
+
+            if (lockWaitFrame == null && s.IndexOf("Waiting on lock", StringComparison.OrdinalIgnoreCase) >= 0)
+                lockWaitFrame = s;
+            if (s.IndexOf("Deadlock", StringComparison.OrdinalIgnoreCase) >= 0)
+                deadlock = true;
+            if (marker == null)
+                foreach (var m in WaitMarkers)
+                    if (s.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) { marker = m.Trim('.'); break; }
         }
-        return null;
+
+        // Prefer the lock-wait annotation - it's the deadlock signal AND carries the owning thread.
+        if (lockWaitFrame != null)
+        {
+            o["waiting"] = true;
+            o["waitOn"] = "lock";
+            var owner = ExtractLockOwnerId(lockWaitFrame);
+            if (owner != null) o["lockOwnerThreadId"] = owner.Value;
+        }
+        else if (deadlock)
+        {
+            o["waiting"] = true;
+            o["waitOn"] = "deadlock";
+        }
+        else if (marker != null)
+        {
+            o["waiting"] = true;
+            o["waitOn"] = marker;
+        }
+    }
+
+    /// <summary>
+    /// Pull the owning thread id out of Concord's "[Waiting on lock owned by Thread 0xNNN, ...]" annotation,
+    /// converted to decimal so it matches the <c>id</c> of another thread in the list. Null if not present.
+    /// </summary>
+    private static int? ExtractLockOwnerId(string annotation)
+    {
+        const string key = "owned by Thread ";
+        int i = annotation.IndexOf(key, StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return null;
+        i += key.Length;
+        if (i + 1 < annotation.Length && annotation[i] == '0' && (annotation[i + 1] == 'x' || annotation[i + 1] == 'X'))
+            i += 2; // skip a "0x"/"0X" prefix
+        int j = i;
+        while (j < annotation.Length && Uri.IsHexDigit(annotation[j])) j++;
+        if (j == i) return null;
+        return int.TryParse(annotation.Substring(i, j - i), System.Globalization.NumberStyles.HexNumber,
+            System.Globalization.CultureInfo.InvariantCulture, out int id) ? id : (int?)null;
     }
 
     private static JObject Mode(string m) => new JObject { ["mode"] = m };

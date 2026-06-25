@@ -65,6 +65,8 @@ Final output: `total = 74`. The 3rd hit (`n=8, soFar=21`) is the most useful to 
   *caller* inspection isn't available through the current tools; note it as a known limitation (and a
   motivation for the per-frame-source / `IDebugStackFrame2` follow-up in `docs/DEBUGGER.md`).
 
+**RESULT (live, 1.3.0):** **(limited)** — physical-only. At the break the stack is `InnerAsync → [Resuming Async Method] → MoveNext → ThreadPool.Dispatch → …`; `ComputeAsync`/`RunAsync`/`Main` are absent (suspended state machines). Current-frame post-await locals + `vs_evaluate` read correctly across iterations, and `threadId` targeting works — but the logical async callers and their suspended hoisted locals aren't reachable, and it's **not** a JMC artifact. Logged as a `docs/DEBUGGER.md` limitation + a ROADMAP item (a logical async-stack reader, the high-value follow-up).
+
 Either outcome is a useful result — the goal is to **know** which one is true, since it can't be inferred
 from source. (If the stack is physical-only, try toggling **Tools ▸ Options ▸ Debugging → "Enable Just My
 Code"** and re-checking — JMC affects how async frames are presented.)

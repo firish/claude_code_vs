@@ -26,22 +26,24 @@ the second, so the cycle forms on **every** run (no flaky interleaving).
 ## Run it
 
 1. Open **`demo/LockJam/LockJam.sln`** in VS 2026 (Debug build, so symbols are present).
-2. Claude Code panel → **Launch Claude Code**. (`vs_threads` is a *read* — it works without the drive
-   toggle. You only need the toggle if you want Claude to `vs_continue`/`vs_stop_debugging` afterward.)
-3. Press **F5**. The app runs ~2 s, wedges, and **self-breaks** (`Debugger.Break()` in `Main`) so every
-   thread is frozen for inspection — no manual *Debug ▸ Break All* needed.
+2. Claude Code panel → tick **Allow Claude to drive debugger** (needed so Claude can pause it with
+   `vs_break_all`) → **Launch Claude Code**.
+3. Press **F5** (or have Claude `vs_start_debugging`). The app wedges almost immediately and **hangs** — it
+   does **not** self-break, so pausing it is the test.
 
-> Why the self-break: a deadlocked thread never *hits* a breakpoint, so the fixture breaks itself once it
-> has hung. (Claude can also pause it on demand with `vs_break_all` — same effect.) When run **without** a
-> debugger it simply hangs.
+> Why you pause it: a deadlocked thread never *hits* a breakpoint, so **Break All** is the only way in —
+> that's exactly what `vs_break_all` does (or *Debug ▸ Break All* by hand). The fixture used to self-break;
+> it now hangs so the run actually exercises `vs_break_all`. (Prefer auto-break? Uncomment the two lines in
+> `Main`.)
 
 ## Ask Claude
 
-> The app is hung. Look at all the threads and tell me which ones are deadlocked and on what — and which
-> ones are *not* part of the deadlock.
+> The app is hung (deadlocked). Pause it, look at all the threads, and tell me which ones are deadlocked
+> and on what — and which ones are *not* part of the deadlock.
 
-**What it should do:** call `vs_threads`, then reason over the result (the thread names encode the route;
-each `xfer` worker's stack tops out in `Monitor.Enter` inside `Transfer`).
+**What it should do:** call `vs_break_all` to freeze the hung process, then `vs_threads`, then reason over
+the result (the thread names encode the route; each `xfer` worker's stack tops out in `Monitor.Enter`
+inside `Transfer`).
 
 ## PASS / FAIL
 

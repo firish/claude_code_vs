@@ -2,18 +2,19 @@
 
 ## Unreleased
 
-Deadlock-triage follow-ups to the 1.3.0 debugger surface — both pure EnvDTE, no AD7.
+Deadlock-triage follow-ups to the 1.3.0 debugger surface — all pure EnvDTE, no AD7.
 
 ### Features
 
 - **`vs_break_all`** — pause a **running or hung** debuggee (Break All / Ctrl+Alt+Break) and return the new state. The way into a deadlock, which never *hits* a breakpoint so there's nothing to stop on. A gated drive tool; rides the same await-break engine (`Debugger.Break(false)` → `OnModeChange`) as continue/step.
-- **Per-thread locals** — `vs_get_frame_locals` gains an optional `threadId` (from `vs_threads`): it switches `Debugger.CurrentThread` to that thread, reads the frame, and restores the context — so you can read a *non-current* thread's args/locals (e.g. each thread parked in a deadlock cycle) without it being the stopped thread. Reads stay ungated.
+- **Per-thread inspection** — `vs_get_frame_locals`, `vs_evaluate`, and `vs_expand` all take an optional `threadId` (from `vs_threads`): they switch `Debugger.CurrentThread` to that thread, read/evaluate, and restore — so you can read a *non-current* thread's args/locals or drill `from.Id` on each thread in a deadlock, without it being the stopped thread. Reads stay ungated.
+- **Lock-chain ownership in `vs_threads`** — a thread blocked on a *contended* lock now carries `lockOwnerThreadId` (the holder), parsed from Concord's `[Waiting on lock owned by Thread 0x..]` stack annotation and converted to decimal so it cross-references another thread's `id`. Follow the chain across threads → the deadlock cycle, straight from the flags.
 
 ### Notes
 
 - **23** `vs-debug` tools total (8 read, ungated + 15 drive, gated).
-- New fixtures: **`demo/LockJam`** (five threads, a 3-node deadlock cycle buried in noise — exercises the `vs_threads` wait/lock heuristic, `vs_break_all`, and per-thread locals) and **`demo/AsyncTrace`** (cross-await inspection: locals/`vs_evaluate` on an async continuation, and characterizing how much of the logical async call stack surfaces).
-- Not yet live-verified on the Windows VS box (macOS dev box can't build the VSIX): the `vs_threads` `Monitor.Enter` flag depends on Just-My-Code not hiding the BCL frame, and direct non-current-thread reads use a `CurrentThread` switch as the reliable path — see the LockJam README.
+- New fixtures: **`demo/LockJam`** (five threads, a 3-node deadlock cycle buried in noise — a busy thread and an idle semaphore-waiter as negative controls) and **`demo/AsyncTrace`** (cross-await inspection: locals/`vs_evaluate` on an async continuation, and characterizing how much of the logical async call stack surfaces).
+- **Live-verified on LockJam (Windows VS 2026):** `vs_break_all` paused the hang, `lockOwnerThreadId` formed the cycle, and per-thread `vs_evaluate('from.Id', threadId:…)` read each account — a fully tool-grounded deadlock diagnosis. Finding: a contended lock does **not** surface a `Monitor.Enter` frame (Just-My-Code or not) — Concord replaces it with the `[Waiting on lock owned by Thread]` annotation, which the heuristic now matches.
 
 ## 1.3.0 - 2026-06-24
 

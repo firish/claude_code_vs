@@ -118,7 +118,8 @@ internal sealed class VsEvaluateTool : IIdeTool
         + "Break-mode only. IMPORTANT: the VS evaluator does NOT support LINQ or lambdas (e.g. "
         + "'list.Select(x => x.Foo)' returns isValid=false) - prefer simple expressions: indexing, "
         + "field/property access, .Count, .Sum(), arithmetic, ReferenceEquals. Note: expressions with "
-        + "side effects (method calls) DO execute - there is no read-only eval.";
+        + "side effects (method calls) DO execute - there is no read-only eval. Pass threadId (from "
+        + "vs_threads) to evaluate on ANOTHER thread - e.g. read 'from.Id' on each thread in a deadlock.";
 
     public JToken Schema => new JObject
     {
@@ -135,6 +136,11 @@ internal sealed class VsEvaluateTool : IIdeTool
                 ["type"] = "integer",
                 ["description"] = "Frame to evaluate in, 0 = current (default 0).",
             },
+            ["threadId"] = new JObject
+            {
+                ["type"] = "integer",
+                ["description"] = "Thread id (from vs_threads) to evaluate on; omit or 0 = current. Use to read another thread's state, e.g. 'from.Id' on each thread in a deadlock.",
+            },
         },
         ["required"] = new JArray("expression"),
     };
@@ -143,18 +149,20 @@ internal sealed class VsEvaluateTool : IIdeTool
     {
         string expression = (string?)args["expression"] ?? "";
         int frameIndex = (int?)args["frameIndex"] ?? 0;
+        int threadId = (int?)args["threadId"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-        var result = DebuggerReader.Evaluate(expression, frameIndex);
+        var result = DebuggerReader.Evaluate(expression, frameIndex, threadId);
 
         // Log the actual result so the Output pane reads like a debug session (not just "valid=True").
         string mode = (string?)result["mode"] ?? "?";
+        string tgt = threadId > 0 ? $", thread={threadId}" : "";
         if (result["error"] != null)
-            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> mode={mode}, error={(string?)result["error"]}");
+            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}{tgt}) -> mode={mode}, error={(string?)result["error"]}");
         else
         {
             string val = (string?)result["value"] ?? "";
             if (val.Length > 160) val = val.Substring(0, 160) + "…";
-            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> valid={(bool?)result["isValid"]}, value={val}");
+            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}{tgt}) -> valid={(bool?)result["isValid"]}, value={val}");
         }
         Ui.BridgeStatus.RecordDebugInspect();
         return result;
@@ -169,7 +177,8 @@ internal sealed class VsExpandTool : IIdeTool
         "Expand an object's structure while paused: evaluate an expression and recurse into its child "
         + "members (fields/properties/elements) to a depth, returning a tree of {name,type,value,children}. "
         + "Use this to inspect a complex object without guessing every member path (e.g. expand 'order' "
-        + "instead of evaluating 'order.Customer.Address.City' blind). Break-mode only.";
+        + "instead of evaluating 'order.Customer.Address.City' blind). Break-mode only. Pass threadId (from "
+        + "vs_threads) to expand on ANOTHER thread - e.g. drill 'from' on each thread in a deadlock.";
 
     public JToken Schema => new JObject
     {
@@ -179,6 +188,7 @@ internal sealed class VsExpandTool : IIdeTool
             ["expression"] = new JObject { ["type"] = "string", ["description"] = "Expression to expand (e.g. 'order', 'this', 'items[0]')." },
             ["depth"] = new JObject { ["type"] = "integer", ["description"] = "Levels of children to expand, 1-3 (default 2)." },
             ["frameIndex"] = new JObject { ["type"] = "integer", ["description"] = "Frame to evaluate in, 0 = current (default 0)." },
+            ["threadId"] = new JObject { ["type"] = "integer", ["description"] = "Thread id (from vs_threads) to expand on; omit or 0 = current. Use to drill into another thread's state." },
         },
         ["required"] = new JArray("expression"),
     };
@@ -188,10 +198,12 @@ internal sealed class VsExpandTool : IIdeTool
         string expression = (string?)args["expression"] ?? "";
         int depth = (int?)args["depth"] ?? 2;
         int frameIndex = (int?)args["frameIndex"] ?? 0;
+        int threadId = (int?)args["threadId"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-        var result = DebuggerReader.Expand(expression, frameIndex, depth);
+        var result = DebuggerReader.Expand(expression, frameIndex, depth, threadId);
         int kids = (result["children"] as JArray)?.Count ?? 0;
-        Log.Info($"vs_expand('{expression}', depth={depth}) -> {(string?)result["mode"]}, {kids} child(ren)");
+        string tgt = threadId > 0 ? $", thread={threadId}" : "";
+        Log.Info($"vs_expand('{expression}', depth={depth}{tgt}) -> {(string?)result["mode"]}, {kids} child(ren)");
         Ui.BridgeStatus.RecordDebugInspect();
         return result;
     }

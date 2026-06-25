@@ -1,0 +1,61 @@
+# Cut a GitHub Release when you push a version tag (e.g. `git tag v1.4.1 && git push --tags`).
+#
+# It pulls the matching section out of CHANGELOG.md for the release notes, builds the Release VSIX,
+# and attaches it. The VSIX build is best-effort (`continue-on-error`) because building a VSIX on a
+# hosted runner is finicky and version-sensitive - if it doesn't produce an artifact, the release is
+# still created with notes and you can drag-drop your local Release build onto it (one upload).
+#
+# The release notes come straight from CHANGELOG.md, so the only per-release work is: add a
+# `## <version> - <date>` section to the changelog, then tag. No more per-feature posting.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # create releases + upload assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')   # v1.4.1 -> 1.4.1
+          $body = @()
+          $inSection = $false
+          foreach ($line in (Get-Content CHANGELOG.md)) {
+            if ($line -match "^##\s+$([regex]::Escape($version))(\s|$)") { $inSection = $true; continue }
+            elseif ($inSection -and $line -match '^##\s') { break }
+            elseif ($inSection) { $body += $line }
+          }
+          if (-not $body) { $body = @("Release $version. See CHANGELOG.md.") }
+          ($body -join "`n").Trim() | Set-Content -Encoding utf8 release-notes.md
+          Write-Host "--- notes ---"; Get-Content release-notes.md
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release VSIX (best-effort)
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          msbuild src/ClaudeCodeVS/ClaudeCodeVS.csproj /t:Restore,Build /p:Configuration=Release /p:DeployExtension=false /v:minimal /nologo
+          $vsix = "src/ClaudeCodeVS/bin/Release/ClaudeCodeVS.vsix"
+          if (Test-Path $vsix) { "vsix=$vsix" >> $env:GITHUB_OUTPUT } else { Write-Host "::warning::VSIX build produced no artifact - releasing notes only." }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: ${{ steps.build.outputs.vsix }}
+          fail_on_unmatched_files: false
+          make_latest: true

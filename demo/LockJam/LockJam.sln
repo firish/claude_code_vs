@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.6.11822.322 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LockJam", "LockJam.csproj", "{7B2D4E81-3A6F-4C9D-B1E8-5F0A2C7D9E34}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7B2D4E81-3A6F-4C9D-B1E8-5F0A2C7D9E34}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7B2D4E81-3A6F-4C9D-B1E8-5F0A2C7D9E34}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7B2D4E81-3A6F-4C9D-B1E8-5F0A2C7D9E34}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7B2D4E81-3A6F-4C9D-B1E8-5F0A2C7D9E34}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {A1C3E5F7-1B2D-3E4F-5061-7283A4B5C6D8}
+	EndGlobalSection
+EndGlobal

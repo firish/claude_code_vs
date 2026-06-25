@@ -18,7 +18,7 @@ Claude Code has first-class IDE integration for VS Code and JetBrains, but not V
 - **Reject with feedback** - reject an edit and tell Claude what to change; it reconsiders with your note.
 - **Run wild (auto-accept)** - a panel toggle to apply edits without opening the diff, for when you want to let it cook. Resets each session.
 - **Diagnostics sharing** - Claude reads Visual Studio's compiler errors/warnings (C# and C++) and fixes them.
-- **Live debugger** - while you're paused at a breakpoint, Claude sees your program's runtime state (call stack, variable values, threads) and, opt-in, can *drive* the debugger (continue, step, set breakpoints, start/stop a session) to corner a bug instead of guessing from source. Full reference: **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
+- **Live debugger** - while you're paused at a breakpoint, Claude sees your program's runtime state (call stack, variable values, threads) and, opt-in, can *drive* the debugger - continue, step, set breakpoints, **break at the throw site of an exception**, **attach to a running app** (a hosted web service or desktop app, not just F5), and **pause a hung process to untangle a deadlock** (following the lock-ownership chain across threads to the exact cycle) - to corner a bug instead of guessing from source. Full reference: **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
 - **Selection context** - Claude automatically knows the file and lines you're looking at.
 - **Live panel** - a dockable *Claude Code* panel: connection status, edit decisions, and **token usage + estimated cost** (latest call vs cumulative session).
 
@@ -40,11 +40,13 @@ Then the fix opened in the native diff, ready to accept or reject:
 
 Full walkthrough, the complete tool list, and the limitations are in **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
 
+It's grown well past stepping since. Claude can now **attach to a running app** (debug a hosted web service or an already-running desktop app, not just F5), **break at the origin of an exception** instead of the catch that swallows it, and **pause a hung process to untangle a deadlock** — reading the lock-ownership chain across threads to pin the exact cycle. There's a worked deadlock walkthrough (LockJam) in **[`docs/DEBUGGER.md`](docs/DEBUGGER.md)**.
+
 ## Requirements
 
 - **Visual Studio 2026.**
 - **The Claude Code CLI**, installed and authenticated - see the [Claude Code docs](https://docs.claude.com/claude-code). *This extension makes no model calls and does no agent work itself; it requires the CLI.*
-- Tested against `claude` **2.1.181**.
+- Tested against `claude` **2.1.191**.
 
 ## Install
 
@@ -88,7 +90,7 @@ For **debugger access**, it adds a `UserPromptSubmit` hook (injects live break s
 ## Limitations & known issues
 
 - **Visual Studio 2026 only** for now (a VS 2022 backfill is planned if there's demand).
-- The IDE-integration protocol is **undocumented and version-fragile** - a `claude` update could change it. Known-good: 2.1.181.
+- The IDE-integration protocol is **undocumented and version-fragile** - a `claude` update could change it. Known-good: 2.1.191.
 - **Diagnostics need a loaded project** (the Error List / Roslyn won't analyze loose files).
 - **Debugger features target managed (.NET) code.** Reading runtime state is always on; driving execution is opt-in. Native/C++ runtime inspection isn't covered.
 - Token stats refresh **on edits** (the reliable hook trigger), so a chat-only turn may not update them immediately.

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Test fixture for the vs_threads wait/lock heuristic (deadlock triage). Compiles and RUNS, then
+       HANGS: five background workers run against three accounts. Three of them lock two accounts in a
+       rotated order (A->B, B->C, C->A) and deadlock in a 3-node cycle; a fourth thread is genuinely busy
+       (spinning) and a fifth is merely idle (parked on an empty queue). The point is to see whether
+       vs_threads can flag the three cycle workers as blocked-on-a-lock and Claude can pick the cycle out
+       of the noise - excluding the busy thread (not waiting) and the idle one (waiting, but not on a lock).
+       Once wedged the app self-breaks via Debugger.Break(), so no manual "Break All" is needed. Open in
+       VS, F5, then ask Claude which threads are deadlocked and on what. See README.md for the walkthrough
+       and the pass/fail criteria (incl. the Just-My-Code caveat that decides whether the heuristic fires). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

@@ -125,28 +125,44 @@ internal sealed class VsRunToLineTool : DriveToolBase
         => Driver.RunToLineAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, DebuggerDriver.DefaultTimeoutMs, ct);
 }
 
+internal sealed class VsBreakAllTool : DriveToolBase
+{
+    public VsBreakAllTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_break_all";
+    public override string Description =>
+        "Pause a RUNNING debuggee that isn't sitting on a breakpoint (Break All / Ctrl+Alt+Break), then "
+        + "return the new state - the way to inspect a HUNG or DEADLOCKED program (a deadlocked thread never "
+        + "hits a breakpoint, so there's nothing to stop on). Needs an active session in run mode (start one "
+        + "with vs_start_debugging or vs_attach). Follow with vs_threads / vs_get_frame_locals to see what "
+        + "each thread is stuck on. Paused already? returns the current state. Driving enabled.";
+    public override JToken Schema => NoArgs();
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct) => Driver.BreakAllAsync(DebuggerDriver.DefaultTimeoutMs, ct);
+}
+
 internal sealed class VsSetBreakpointTool : DriveToolBase
 {
     public VsSetBreakpointTool(DebuggerDriver d) : base(d) { }
     public override string Name => "vs_set_breakpoint";
     public override string Description =>
-        "Set a breakpoint at a file:line, optionally with a condition (e.g. \"i == 5\"). Works in any mode "
-        + "(you don't have to be paused). Driving enabled. Use vs_continue/vs_run_to_line to reach it.";
+        "Set a breakpoint - either at a file:line, OR by FUNCTION NAME (break whenever that method is "
+        + "entered, anywhere it's called from, no file:line needed - ideal when you don't know the location "
+        + "or it's in a library). Optional condition (e.g. \"i == 5\"); hit count applies to file:line only. "
+        + "Works in any mode. Driving enabled. Use vs_continue/vs_run_to_line to reach it.";
     public override JToken Schema => new JObject
     {
         ["type"] = "object",
         ["properties"] = new JObject
         {
-            ["file"] = Prop("string", "Absolute path of the file."),
-            ["line"] = Prop("integer", "1-based line number for the breakpoint."),
+            ["function"] = Prop("string", "Method to break on, e.g. 'Namespace.Type.Method' or 'Type.Method'. Use this OR file+line."),
+            ["file"] = Prop("string", "Absolute path of the file (use with line; omit when using function)."),
+            ["line"] = Prop("integer", "1-based line number (use with file)."),
             ["condition"] = Prop("string", "Optional break-when-true condition in the debugged language."),
-            ["hitCount"] = Prop("integer", "Optional: only break on a hit count, e.g. 5 to catch the 5th iteration."),
+            ["hitCount"] = Prop("integer", "Optional (file:line only): only break on a hit count, e.g. 5 to catch the 5th iteration."),
             ["hitCountType"] = Prop("string", "How to apply hitCount: 'equal' (==N, default), 'atLeast' (>=N), or 'multiple' (every Nth)."),
         },
-        ["required"] = new JArray("file", "line"),
     };
     protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
-        => Driver.SetBreakpointAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, (string?)a["condition"],
+        => Driver.SetBreakpointAsync((string?)a["file"], (int?)a["line"] ?? 0, (string?)a["function"], (string?)a["condition"],
             (int?)a["hitCount"] ?? 0, (string?)a["hitCountType"], ct);
 }
 
@@ -212,6 +228,30 @@ internal sealed class VsRemoveBreakpointTool : DriveToolBase
         => Driver.RemoveBreakpointAsync((string?)a["file"] ?? "", (int?)a["line"] ?? 0, ct);
 }
 
+internal sealed class VsBreakOnThrownTool : DriveToolBase
+{
+    public VsBreakOnThrownTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_break_on_thrown";
+    public override string Description =>
+        "Make the debugger STOP at the throw site of a managed exception (first-chance), even if it's "
+        + "caught - so you see WHERE it originates, not where a generic catch swallows it. Give the full "
+        + "type name (e.g. 'System.NullReferenceException', 'System.InvalidOperationException'). Set "
+        + "enabled=false to clear it. Works in any mode; then use vs_start_debugging/vs_continue to reach "
+        + "the throw and read $exception + the locals at the origin. Driving enabled.";
+    public override JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["exception"] = Prop("string", "Full managed exception type name, e.g. 'System.NullReferenceException'."),
+            ["enabled"] = new JObject { ["type"] = "boolean", ["description"] = "true = break when thrown (default), false = clear it." },
+        },
+        ["required"] = new JArray("exception"),
+    };
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
+        => Driver.SetBreakOnThrownAsync((string?)a["exception"] ?? "", (bool?)a["enabled"] ?? true, ct);
+}
+
 internal sealed class VsStartDebuggingTool : DriveToolBase
 {
     public VsStartDebuggingTool(DebuggerDriver d) : base(d) { }
@@ -231,4 +271,35 @@ internal sealed class VsStopDebuggingTool : DriveToolBase
     public override string Description => "Stop the current debugging session (Shift+F5), returning to design mode. Driving enabled.";
     public override JToken Schema => NoArgs();
     protected override Task<JObject> RunAsync(JToken a, CancellationToken ct) => Driver.StopDebuggingAsync(ct);
+}
+
+internal sealed class VsAttachTool : DriveToolBase
+{
+    public VsAttachTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_attach";
+    public override string Description =>
+        "Attach the debugger to a RUNNING local process - by id (preferred) or name substring - to debug a "
+        + "live web app (Kestrel / IIS w3wp), service, or desktop app instead of F5-launching a startup "
+        + "project. Find the target with vs_list_processes. Set breakpoints / vs_break_on_thrown first or "
+        + "alongside, then the process runs into them. Driving enabled.";
+    public override JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["pid"] = Prop("integer", "Process id to attach to (preferred; from vs_list_processes)."),
+            ["name"] = Prop("string", "Process name substring, if you don't have the pid (first match wins)."),
+        },
+    };
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct)
+        => Driver.AttachAsync((int?)a["pid"] ?? 0, (string?)a["name"], ct);
+}
+
+internal sealed class VsDetachTool : DriveToolBase
+{
+    public VsDetachTool(DebuggerDriver d) : base(d) { }
+    public override string Name => "vs_detach";
+    public override string Description => "Detach the debugger from all processes (they keep running). The counterpart to vs_attach. Driving enabled.";
+    public override JToken Schema => NoArgs();
+    protected override Task<JObject> RunAsync(JToken a, CancellationToken ct) => Driver.DetachAsync(ct);
 }

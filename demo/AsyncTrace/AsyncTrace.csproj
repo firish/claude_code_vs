@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Test fixture for inspecting an async call chain across an await boundary. RunAsync -> ComputeAsync
+       -> InnerAsync, where the awaits resume on threadpool threads (Task.Yield + ConfigureAwait(false)),
+       so a breakpoint inside InnerAsync stops on a CONTINUATION - the physical stack no longer holds the
+       async callers. The point is to confirm what the debugger surface sees there: that the current async
+       frame's args/locals and vs_evaluate read correct post-await values, and to characterize how much of
+       the logical async call chain shows up in the call stack / vs_get_frame_locals (EnvDTE may stitch the
+       async callers or show only the physical resumed stack). Open in VS, set the breakpoint on the marked
+       line in InnerAsync, F5, then ask Claude to read the locals and walk the stack. See README.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+</Project>

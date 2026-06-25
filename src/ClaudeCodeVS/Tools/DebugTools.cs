@@ -70,7 +70,9 @@ internal sealed class VsGetFrameLocalsTool : IIdeTool
     public string Description =>
         "Get the arguments and local variables (with runtime values) for a specific call-stack frame "
         + "while paused. frameIndex 0 is the innermost/current frame; higher indices walk up toward "
-        + "callers. Use vs_debug_state first to see the call stack. Break-mode only.";
+        + "callers. By default reads the current/stopped thread; pass threadId (from vs_threads) to read "
+        + "ANOTHER thread's frame - e.g. to inspect each thread parked in a deadlock. Use vs_debug_state or "
+        + "vs_threads first to see the stacks. Break-mode only.";
 
     public JToken Schema => new JObject
     {
@@ -82,17 +84,24 @@ internal sealed class VsGetFrameLocalsTool : IIdeTool
                 ["type"] = "integer",
                 ["description"] = "Call-stack frame index, 0 = innermost/current (default 0).",
             },
+            ["threadId"] = new JObject
+            {
+                ["type"] = "integer",
+                ["description"] = "Thread id (from vs_threads) to read; omit or 0 = the current/stopped thread. Use to read another thread's locals (e.g. each thread in a deadlock cycle).",
+            },
         },
     };
 
     public async Task<object> InvokeAsync(JToken args, CancellationToken ct)
     {
         int frameIndex = (int?)args["frameIndex"] ?? 0;
+        int threadId = (int?)args["threadId"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-        var result = DebuggerReader.ReadFrameLocals(frameIndex);
+        var result = DebuggerReader.ReadFrameLocals(frameIndex, threadId);
         var fn = (string?)result["function"];
         var vals = DebuggerReader.SummarizeValues(result);
-        Log.Info($"vs_get_frame_locals(frame={frameIndex}) -> mode={(string?)result["mode"]}{(fn != null ? $" @ {fn}" : "")}{(vals.Length > 0 ? $" · {vals}" : "")}");
+        string tgt = threadId > 0 ? $", thread={threadId}" : "";
+        Log.Info($"vs_get_frame_locals(frame={frameIndex}{tgt}) -> mode={(string?)result["mode"]}{(fn != null ? $" @ {fn}" : "")}{(vals.Length > 0 ? $" · {vals}" : "")}");
         Ui.BridgeStatus.RecordDebugInspect();
         return result;
     }
@@ -109,7 +118,8 @@ internal sealed class VsEvaluateTool : IIdeTool
         + "Break-mode only. IMPORTANT: the VS evaluator does NOT support LINQ or lambdas (e.g. "
         + "'list.Select(x => x.Foo)' returns isValid=false) - prefer simple expressions: indexing, "
         + "field/property access, .Count, .Sum(), arithmetic, ReferenceEquals. Note: expressions with "
-        + "side effects (method calls) DO execute - there is no read-only eval.";
+        + "side effects (method calls) DO execute - there is no read-only eval. Pass threadId (from "
+        + "vs_threads) to evaluate on ANOTHER thread - e.g. read 'from.Id' on each thread in a deadlock.";
 
     public JToken Schema => new JObject
     {
@@ -126,6 +136,11 @@ internal sealed class VsEvaluateTool : IIdeTool
                 ["type"] = "integer",
                 ["description"] = "Frame to evaluate in, 0 = current (default 0).",
             },
+            ["threadId"] = new JObject
+            {
+                ["type"] = "integer",
+                ["description"] = "Thread id (from vs_threads) to evaluate on; omit or 0 = current. Use to read another thread's state, e.g. 'from.Id' on each thread in a deadlock.",
+            },
         },
         ["required"] = new JArray("expression"),
     };
@@ -134,18 +149,20 @@ internal sealed class VsEvaluateTool : IIdeTool
     {
         string expression = (string?)args["expression"] ?? "";
         int frameIndex = (int?)args["frameIndex"] ?? 0;
+        int threadId = (int?)args["threadId"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-        var result = DebuggerReader.Evaluate(expression, frameIndex);
+        var result = DebuggerReader.Evaluate(expression, frameIndex, threadId);
 
         // Log the actual result so the Output pane reads like a debug session (not just "valid=True").
         string mode = (string?)result["mode"] ?? "?";
+        string tgt = threadId > 0 ? $", thread={threadId}" : "";
         if (result["error"] != null)
-            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> mode={mode}, error={(string?)result["error"]}");
+            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}{tgt}) -> mode={mode}, error={(string?)result["error"]}");
         else
         {
             string val = (string?)result["value"] ?? "";
             if (val.Length > 160) val = val.Substring(0, 160) + "…";
-            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}) -> valid={(bool?)result["isValid"]}, value={val}");
+            Log.Info($"vs_evaluate('{expression}', frame={frameIndex}{tgt}) -> valid={(bool?)result["isValid"]}, value={val}");
         }
         Ui.BridgeStatus.RecordDebugInspect();
         return result;
@@ -160,7 +177,8 @@ internal sealed class VsExpandTool : IIdeTool
         "Expand an object's structure while paused: evaluate an expression and recurse into its child "
         + "members (fields/properties/elements) to a depth, returning a tree of {name,type,value,children}. "
         + "Use this to inspect a complex object without guessing every member path (e.g. expand 'order' "
-        + "instead of evaluating 'order.Customer.Address.City' blind). Break-mode only.";
+        + "instead of evaluating 'order.Customer.Address.City' blind). Break-mode only. Pass threadId (from "
+        + "vs_threads) to expand on ANOTHER thread - e.g. drill 'from' on each thread in a deadlock.";
 
     public JToken Schema => new JObject
     {
@@ -170,6 +188,7 @@ internal sealed class VsExpandTool : IIdeTool
             ["expression"] = new JObject { ["type"] = "string", ["description"] = "Expression to expand (e.g. 'order', 'this', 'items[0]')." },
             ["depth"] = new JObject { ["type"] = "integer", ["description"] = "Levels of children to expand, 1-3 (default 2)." },
             ["frameIndex"] = new JObject { ["type"] = "integer", ["description"] = "Frame to evaluate in, 0 = current (default 0)." },
+            ["threadId"] = new JObject { ["type"] = "integer", ["description"] = "Thread id (from vs_threads) to expand on; omit or 0 = current. Use to drill into another thread's state." },
         },
         ["required"] = new JArray("expression"),
     };
@@ -179,10 +198,12 @@ internal sealed class VsExpandTool : IIdeTool
         string expression = (string?)args["expression"] ?? "";
         int depth = (int?)args["depth"] ?? 2;
         int frameIndex = (int?)args["frameIndex"] ?? 0;
+        int threadId = (int?)args["threadId"] ?? 0;
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-        var result = DebuggerReader.Expand(expression, frameIndex, depth);
+        var result = DebuggerReader.Expand(expression, frameIndex, depth, threadId);
         int kids = (result["children"] as JArray)?.Count ?? 0;
-        Log.Info($"vs_expand('{expression}', depth={depth}) -> {(string?)result["mode"]}, {kids} child(ren)");
+        string tgt = threadId > 0 ? $", thread={threadId}" : "";
+        Log.Info($"vs_expand('{expression}', depth={depth}{tgt}) -> {(string?)result["mode"]}, {kids} child(ren)");
         Ui.BridgeStatus.RecordDebugInspect();
         return result;
     }
@@ -205,6 +226,66 @@ internal sealed class VsThreadsTool : IIdeTool
         var result = DebuggerReader.ReadThreads();
         int n = (result["threads"] as JArray)?.Count ?? 0;
         Log.Info($"vs_threads -> mode={(string?)result["mode"]}, {n} thread(s)");
+        Ui.BridgeStatus.RecordDebugInspect();
+        return result;
+    }
+}
+
+/// <summary>vs_exception - inspect the exception in scope ($exception) at a first-chance break or in a catch.</summary>
+internal sealed class VsExceptionTool : IIdeTool
+{
+    public string Name => "vs_exception";
+    public string Description =>
+        "Inspect the exception currently in scope while paused ($exception) - at a first-chance break "
+        + "(after vs_break_on_thrown) or inside a catch block. Returns its type, message, and an expanded "
+        + "tree including InnerException and stack, so you see WHAT was thrown and WHY without knowing the "
+        + "$exception pseudo-variable. Break-mode only.";
+
+    public JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["frameIndex"] = new JObject { ["type"] = "integer", ["description"] = "Frame to evaluate in, 0 = current (default 0)." },
+        },
+    };
+
+    public async Task<object> InvokeAsync(JToken args, CancellationToken ct)
+    {
+        int frameIndex = (int?)args["frameIndex"] ?? 0;
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var result = DebuggerReader.ReadException(frameIndex);
+        Log.Info($"vs_exception -> mode={(string?)result["mode"]}, type={(string?)result["type"] ?? "(none)"}");
+        Ui.BridgeStatus.RecordDebugInspect();
+        return result;
+    }
+}
+
+/// <summary>vs_list_processes - local processes available to attach to (the door to debugging real apps).</summary>
+internal sealed class VsListProcessesTool : IIdeTool
+{
+    public string Name => "vs_list_processes";
+    public string Description =>
+        "List running local processes you can attach the debugger to (id + name, flagged if already being "
+        + "debugged). Pass a name filter (e.g. 'dotnet', 'w3wp', or the app name) - the machine has hundreds "
+        + "of processes. Use this to find a running web app / service / desktop app, then vs_attach to it. "
+        + "Works in any mode.";
+
+    public JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["filter"] = new JObject { ["type"] = "string", ["description"] = "Case-insensitive substring to match in the process name/path (recommended)." },
+        },
+    };
+
+    public async Task<object> InvokeAsync(JToken args, CancellationToken ct)
+    {
+        string? filter = (string?)args["filter"];
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var result = DebuggerReader.ReadProcesses(filter);
+        Log.Info($"vs_list_processes(filter={filter ?? "*"}) -> {(int?)result["count"] ?? 0} match(es)");
         Ui.BridgeStatus.RecordDebugInspect();
         return result;
     }

@@ -257,19 +257,26 @@ internal sealed class BridgeHost : IDisposable
         yield return new VsEvaluateTool();
         yield return new VsExpandTool();    // object-graph expansion
         yield return new VsThreadsTool();   // all threads + stacks
+        yield return new VsExceptionTool();      // inspect $exception at a throw / in a catch
+        yield return new VsListProcessesTool();  // attach targets (debug real running apps)
         // Phase 3 - drive (each gated behind BridgeStatus.AllowDebuggerDrive).
         yield return new VsContinueTool(driver);
         yield return new VsStepOverTool(driver);
         yield return new VsStepIntoTool(driver);
         yield return new VsStepOutTool(driver);
         yield return new VsRunToLineTool(driver);
+        yield return new VsBreakAllTool(driver);          // pause a running/hung debuggee (Break All)
         yield return new VsSetBreakpointTool(driver);
         yield return new VsRemoveBreakpointTool(driver);
+        yield return new VsBreakOnThrownTool(driver);     // first-chance break at a managed exception's throw site
         yield return new VsFreezeThreadTool(driver);      // freeze/thaw a thread
         yield return new VsSetNextStatementTool(driver);  // move the execution pointer
         // Phase 3 - session control (start = F5 to first break, stop = Shift+F5).
         yield return new VsStartDebuggingTool(driver);
         yield return new VsStopDebuggingTool(driver);
+        // Tier 1 - attach to a real running app (web / service / desktop), not just F5 launch.
+        yield return new VsAttachTool(driver);
+        yield return new VsDetachTool(driver);
     }
 
     /// <summary>Best-effort workspace root for the lockfile: the open solution's directory, else none.</summary>

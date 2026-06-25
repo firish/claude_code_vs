@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Test fixture for ATTACH to a running real app + break-on-thrown (vs_attach / vs_break_on_thrown).
+       A minimal ASP.NET Core API that STAYS RUNNING (unlike the console fixtures), so it's a live process
+       you attach to instead of F5-launching. GET /quote/103 throws a NullReferenceException deep in the
+       request handler (order 103 has a null Customer), swallowed into a generic 500 - so attaching and
+       breaking on first-chance NullReferenceException lands at the THROW site, not the catch. The full
+       attach + drive-the-request walkthrough (incl. letting Claude trigger the request itself) is in
+       README.md. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

@@ -94,6 +94,38 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
         }
     }
 
+    /// <summary>
+    /// Break All: pause a RUNNING debuggee that isn't sitting on a breakpoint - the only way to inspect a
+    /// hung or deadlocked program (a deadlocked thread never hits a breakpoint). Issues EnvDTE's Break with
+    /// WaitForBreakOrEnd=false (never blocks the UI thread) and awaits the next break through the same
+    /// OnModeChange engine as continue/step. Returns the current snapshot if already paused; errors in
+    /// design mode (nothing running to pause).
+    /// </summary>
+    public async Task<JObject> BreakAllAsync(int timeoutMs, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+
+        var dbg = Dte()?.Debugger;
+        if (dbg == null) return Err("no debugger available");
+
+        dbgDebugMode mode;
+        try { mode = dbg.CurrentMode; } catch { mode = dbgDebugMode.dbgDesignMode; }
+        if (mode == dbgDebugMode.dbgBreakMode) return DebuggerReader.ReadSnapshot(); // already paused
+        if (mode == dbgDebugMode.dbgDesignMode)
+            return new JObject { ["mode"] = "design", ["error"] = "not debugging; nothing to pause (start a session with vs_start_debugging or vs_attach first)" };
+
+        if (!BeginCommand()) return Err("a debugger drive command is already in progress");
+        try
+        {
+            EnsureAdvised();
+            var waiter = ArmWaiter();          // park BEFORE issuing so we can't miss an instant break
+            try { dbg.Break(false); }          // Break All; WaitForBreakOrEnd=false (don't block the UI thread)
+            catch (Exception e) { ClearWaiter(waiter); return Err($"break failed: {e.Message}"); }
+            return await AwaitBreakAsync(waiter, timeoutMs, ct);
+        }
+        finally { EndCommand(); }
+    }
+
     // ===== session control (start = F5 + await first break; stop = Shift+F5) =====
 
     /// <summary>Start a debug session (only from design mode) and run to the first break (or completion).</summary>
@@ -141,36 +173,101 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
         return new JObject { ["ok"] = true, ["mode"] = "design", ["note"] = "debugging stopped" };
     }
 
-    // ===== breakpoint mutation (synchronous; no break to await) =====
-
-    public async Task<JObject> SetBreakpointAsync(string file, int line, string? condition, int hitCount, string? hitCountType, CancellationToken ct)
+    /// <summary>
+    /// Attach the debugger to a running local process - by pid (preferred, exact) or a name substring. The
+    /// way to debug REAL apps (a running web app / service / desktop app) instead of F5-launching a script.
+    /// Returns the attached process + the resulting mode. No break to await (attach lands in run mode).
+    /// </summary>
+    public async Task<JObject> AttachAsync(int pid, string? name, CancellationToken ct)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
         var dbg = Dte()?.Debugger;
         if (dbg == null) return Err("no debugger available");
-        if (string.IsNullOrWhiteSpace(file) || line <= 0) return Err("file and a positive line are required");
+        if (pid <= 0 && string.IsNullOrWhiteSpace(name))
+            return Err("a process id (preferred) or name is required; use vs_list_processes to find it");
+
+        try
+        {
+            EnvDTE.Process? match = null;
+            int matchId = 0; string matchName = "";
+            foreach (EnvDTE.Process p in dbg.LocalProcesses) // qualify: System.Diagnostics.Process may be in scope
+            {
+                int id = 0; string pname = "";
+                try { id = p.ProcessID; } catch { }
+                try { pname = p.Name ?? ""; } catch { }
+                bool hit = pid > 0 ? id == pid
+                                   : pname.IndexOf(name!, StringComparison.OrdinalIgnoreCase) >= 0;
+                if (hit) { match = p; matchId = id; matchName = pname; break; }
+            }
+            if (match == null)
+                return Err(pid > 0 ? $"no local process with id {pid}" : $"no local process matching '{name}'");
+
+            match.Attach();
+            return new JObject
+            {
+                ["ok"] = true,
+                ["attached"] = new JObject { ["id"] = matchId, ["name"] = matchName },
+                ["mode"] = CurrentModeString(dbg),
+            };
+        }
+        catch (Exception e) { return Err($"attach failed: {e.Message} (the process may need elevation, or already be under a debugger)"); }
+    }
+
+    /// <summary>Detach from all debugged processes (they keep running). No-op if not debugging.</summary>
+    public async Task<JObject> DetachAsync(CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var dbg = Dte()?.Debugger;
+        if (dbg == null) return Err("no debugger available");
+        try { dbg.DetachAll(); }
+        catch (Exception e) { return Err($"detach failed: {e.Message}"); }
+        return new JObject { ["ok"] = true, ["note"] = "detached from all processes (they keep running)" };
+    }
+
+    // ===== breakpoint mutation (synchronous; no break to await) =====
+
+    public async Task<JObject> SetBreakpointAsync(string? file, int line, string? function, string? condition, int hitCount, string? hitCountType, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var dbg = Dte()?.Debugger;
+        if (dbg == null) return Err("no debugger available");
+
+        bool byFunction = !string.IsNullOrWhiteSpace(function);
+        if (!byFunction && (string.IsNullOrWhiteSpace(file) || line <= 0))
+            return Err("provide a function name, or a file and a positive line");
 
         try
         {
             Breakpoints added;
-            if (hitCount > 0)
+            if (byFunction)
+            {
+                // Function breakpoint: break whenever the named method is entered, wherever it's called from
+                // - no file:line needed. Ideal when you don't know (or can't open) the source location, or
+                // the method is in a library. (Hit-count is file:line-only; condition is supported here.)
+                added = string.IsNullOrEmpty(condition)
+                    ? dbg.Breakpoints.Add(Function: function!)
+                    : dbg.Breakpoints.Add(Function: function!, Condition: condition);
+            }
+            else if (hitCount > 0)
             {
                 var hct = MapHitCountType(hitCountType);
                 added = string.IsNullOrEmpty(condition)
-                    ? dbg.Breakpoints.Add(File: file, Line: line, HitCount: hitCount, HitCountType: hct)
-                    : dbg.Breakpoints.Add(File: file, Line: line, Condition: condition, HitCount: hitCount, HitCountType: hct);
+                    ? dbg.Breakpoints.Add(File: file!, Line: line, HitCount: hitCount, HitCountType: hct)
+                    : dbg.Breakpoints.Add(File: file!, Line: line, Condition: condition, HitCount: hitCount, HitCountType: hct);
             }
             else
             {
                 added = string.IsNullOrEmpty(condition)
-                    ? dbg.Breakpoints.Add(File: file, Line: line)
-                    : dbg.Breakpoints.Add(File: file, Line: line, Condition: condition);
+                    ? dbg.Breakpoints.Add(File: file!, Line: line)
+                    : dbg.Breakpoints.Add(File: file!, Line: line, Condition: condition);
             }
 
             int bound = 0; try { bound = added.Count; } catch { }
-            var result = new JObject { ["ok"] = true, ["file"] = file, ["line"] = line, ["bound"] = bound };
+            var result = new JObject { ["ok"] = true, ["bound"] = bound };
+            if (byFunction) result["function"] = function;
+            else { result["file"] = file; result["line"] = line; }
             if (!string.IsNullOrEmpty(condition)) result["condition"] = condition;
-            if (hitCount > 0) { result["hitCount"] = hitCount; result["hitCountType"] = string.IsNullOrEmpty(hitCountType) ? "equal" : hitCountType; }
+            if (!byFunction && hitCount > 0) { result["hitCount"] = hitCount; result["hitCountType"] = string.IsNullOrEmpty(hitCountType) ? "equal" : hitCountType; }
             return result;
         }
         catch (Exception e) { return Err($"set breakpoint failed: {e.Message}"); }
@@ -258,6 +355,55 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
         catch (Exception e) { return Err($"remove breakpoint failed: {e.Message}"); }
 
         return new JObject { ["ok"] = true, ["file"] = file, ["line"] = line, ["removed"] = removed };
+    }
+
+    /// <summary>
+    /// Break-on-thrown (first-chance): stop at the THROW SITE of a named managed exception, not where it's
+    /// caught. Surfaces bugs a generic catch swallows - the exception originates deep and you only see a
+    /// vague "skipped" downstream. Uses the EnvDTE90 exception-settings API (<c>Debugger3</c>) - the proven
+    /// managed path, NOT the low-level AD7 IDebugEngine2 route. Works in any mode; when the exception later
+    /// fires, the break arrives through the same OnModeChange path as a breakpoint.
+    /// </summary>
+    public async Task<JObject> SetBreakOnThrownAsync(string exceptionName, bool enabled, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        var dte = Dte();
+        if (dte?.Debugger == null) return Err("no debugger available");
+        if (string.IsNullOrWhiteSpace(exceptionName))
+            return Err("an exception type name is required, e.g. 'System.NullReferenceException'");
+
+        // ExceptionGroups lives on Debugger3 (EnvDTE90), not the base EnvDTE.Debugger - cast up. This is
+        // exactly the cast the prior break-on-thrown attempt missed (it used EnvDTE.Debugger and hit CS1061).
+        if (dte.Debugger is not EnvDTE90.Debugger3 d3)
+            return Err("this VS doesn't expose exception settings (EnvDTE90.Debugger3 unavailable)");
+
+        // The CLR/.NET exception category. Null when no solution/project is loaded (mirrors the
+        // "Error List empty for loose files" caveat) - report that rather than NRE-ing.
+        EnvDTE90.ExceptionSettings? clr;
+        try { clr = d3.ExceptionGroups?.Item("Common Language Runtime Exceptions"); }
+        catch (Exception e) { return Err($"CLR exception settings unavailable: {e.Message}"); }
+        if (clr == null) return Err("CLR exception settings unavailable - open a solution/project first");
+
+        try
+        {
+            // Touch a SINGLE named type: look it up, and if it isn't already listed, register it. We never
+            // enumerate the whole category - setting thousands of children is a multi-minute UI freeze.
+            EnvDTE90.ExceptionSetting? ex = null;
+            try { ex = clr.Item(exceptionName); } catch { /* not in the list yet */ }
+            if (ex == null) ex = clr.NewException(exceptionName, 0); // code 0: managed exceptions key on name
+
+            clr.SetBreakWhenThrown(enabled, ex);
+            return new JObject
+            {
+                ["ok"] = true,
+                ["exception"] = exceptionName,
+                ["breakWhenThrown"] = enabled,
+                ["note"] = enabled
+                    ? "VS will now break at the throw site of this exception (first-chance), even if it's caught."
+                    : "Break-on-thrown cleared for this exception.",
+            };
+        }
+        catch (Exception e) { return Err($"set break-on-thrown failed: {e.Message}"); }
     }
 
     // ===== the await-break engine =====
@@ -349,6 +495,21 @@ internal sealed class DebuggerDriver : IVsDebuggerEvents, IDisposable
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try { return dbg.CurrentMode == dbgDebugMode.dbgBreakMode; } catch { return false; }
+    }
+
+    private static string CurrentModeString(Debugger dbg)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return dbg.CurrentMode switch
+            {
+                dbgDebugMode.dbgBreakMode => "break",
+                dbgDebugMode.dbgRunMode => "run",
+                _ => "design",
+            };
+        }
+        catch { return "unknown"; }
     }
 
     private static JObject NotPaused(Debugger dbg)

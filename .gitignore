@@ -5,6 +5,7 @@ obj/
 # Visual Studio
 .vs/
 .claude/
+.mcp.json
 *.user
 *.suo
 *.userprefs

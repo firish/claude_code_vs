@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-06-25
 
 Deadlock-triage follow-ups to the 1.3.0 debugger surface — all pure EnvDTE, no AD7.
 

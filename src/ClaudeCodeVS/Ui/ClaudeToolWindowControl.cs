@@ -75,9 +75,10 @@ internal sealed class ClaudeToolWindowControl : UserControl
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // feed
 
-        // ---- Row 0: header (title + status pill) ----
+        // ---- Row 0: header (status pill) ----
+        // No "Claude Code" text here: the tool window's own Caption (ClaudeToolWindow.cs) already shows
+        // it in the tab/title bar, so a second copy here just duplicated the first line.
         var header = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
-        header.Children.Add(new TextBlock { Text = "Claude Code", FontSize = 15, FontWeight = FontWeights.SemiBold });
 
         var statusRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0) };
         _dot = new Ellipse { Width = 9, Height = 9, Fill = DotIdle, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
@@ -91,17 +92,16 @@ internal sealed class ClaudeToolWindowControl : UserControl
         Grid.SetRow(header, 0);
 
         // ---- Row 1: toolbar ----
-        var toolbar = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        var right = new StackPanel { Orientation = Orientation.Horizontal };
-        DockPanel.SetDock(right, Dock.Right);
-        right.Children.Add(MakeButton("Clear", () => _feed!.Items.Clear()));
-        right.Children.Add(MakeButton("Output", () => { try { BridgeStatus.ShowOutputAction?.Invoke(); } catch { } }));
-
-        var left = new StackPanel { Orientation = Orientation.Horizontal };
-        left.Children.Add(MakeButton("Launch Claude Code", () => { _ = BridgeStatus.LaunchAction?.Invoke(); }));
+        // One flat WrapPanel for all four buttons (no DockPanel right-docking): docking Clear/Output to
+        // the right pre-claims width, which clipped the Launch buttons mid-text at narrow panel widths.
+        // Wrapping keeps every button whole and reachable at any width; right-alignment wasn't worth that.
+        var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        toolbar.Children.Add(MakeButton("Launch Claude Code", () => { _ = BridgeStatus.LaunchAction?.Invoke(); }));
         var launchExternal = MakeButton("External console", () => { _ = BridgeStatus.LaunchExternalAction?.Invoke(); });
         launchExternal.ToolTip = "Launch Claude Code in a separate console window instead of the docked terminal. Unlike the docked tab, it survives closing Visual Studio.";
-        left.Children.Add(launchExternal);
+        toolbar.Children.Add(launchExternal);
+        toolbar.Children.Add(MakeButton("Clear", () => _feed!.Items.Clear()));
+        toolbar.Children.Add(MakeButton("Output", () => { try { BridgeStatus.ShowOutputAction?.Invoke(); } catch { } }));
 
         // The toggles get their own WRAPPING row: four checkboxes stopped fitting beside the buttons at
         // a typically-docked panel width (they were simply invisible until the panel was widened), and a
@@ -164,9 +164,6 @@ internal sealed class ClaudeToolWindowControl : UserControl
         _notify.Unchecked += (s, e) => BridgeStatus.SetNotifyEnabled(false);
         _notify.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
         toggles.Children.Add(_notify);
-
-        toolbar.Children.Add(right);
-        toolbar.Children.Add(left);
 
         var toolbarStack = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
         toolbar.Margin = new Thickness(0);

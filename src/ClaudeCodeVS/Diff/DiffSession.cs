@@ -14,7 +14,7 @@ namespace ClaudeCodeVs.Diff;
 /// chooses (build-plan §5). The native diff window is a read-only *viewer* with no buttons of its
 /// own, so the InfoBar is how the user acts. All members run on the UI thread.
 /// </summary>
-internal sealed class DiffSession : IVsInfoBarUIEvents
+internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
 {
     // Properties, not consts: they resolve through the localized resources (issue #20), and the
     // click handler compares actionItem.Text against these same values, so the round-trip holds in
@@ -34,6 +34,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
 
     private IVsInfoBarUIElement? _infoBar;
     private uint _cookie;
+    private uint _frameEventsCookie;
     private bool _resolved;
 
     private DiffSession(DiffDecisions decisions, string tabName, string newPath, string contents,
@@ -91,8 +92,86 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, writeBack, frame);
         DiffRegistry.Register(tabName, session);
         session.AttachInfoBar();
+        session.AdviseFrameEvents();
         frame.Show();
     }
+
+    /// <summary>
+    /// Watch for the diff window being closed by the user (the tab's X, Ctrl+F4, Close All Documents).
+    /// Without this the InfoBar's own links are the ONLY way out: closing the frame does not raise the
+    /// InfoBar's OnClosed, so the parked openDiff response never completes and the CLI's Edit tool hangs
+    /// forever with the staged temp file still on disk.
+    ///
+    /// Deliberately the shell-wide event source rather than the frame's VSFPROPID_ViewHelper: the
+    /// comparison window installs its OWN view helper, and overwriting it would break the diff itself.
+    /// </summary>
+    private void AdviseFrameEvents()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (ServiceProvider.GlobalProvider.GetService(typeof(SVsUIShell)) is IVsUIShell7 shell)
+                _frameEventsCookie = shell.AdviseWindowFrameEvents(this);
+            else
+                Log.Warn("IVsUIShell7 unavailable; a diff closed by its tab X will not auto-reject");
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"could not watch the diff window for close: {e.Message}");
+        }
+    }
+
+    private void UnadviseFrameEvents()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_frameEventsCookie == 0) return;
+        var cookie = _frameEventsCookie;
+        _frameEventsCookie = 0;
+        try
+        {
+            if (ServiceProvider.GlobalProvider.GetService(typeof(SVsUIShell)) is IVsUIShell7 shell)
+                shell.UnadviseWindowFrameEvents(cookie);
+        }
+        catch { /* shutting down */ }
+    }
+
+    /// <summary>
+    /// COM identity, not RCW identity: the shell can hand back a different wrapper for the same frame,
+    /// so comparing the references alone would silently miss the close we are waiting for.
+    /// </summary>
+    private static bool IsSameFrame(IVsWindowFrame? a, IVsWindowFrame? b)
+    {
+        if (a is null || b is null) return false;
+        if (ReferenceEquals(a, b)) return true;
+        IntPtr pa = IntPtr.Zero, pb = IntPtr.Zero;
+        try
+        {
+            pa = System.Runtime.InteropServices.Marshal.GetIUnknownForObject(a);
+            pb = System.Runtime.InteropServices.Marshal.GetIUnknownForObject(b);
+            return pa == pb;
+        }
+        catch { return false; }
+        finally
+        {
+            if (pa != IntPtr.Zero) System.Runtime.InteropServices.Marshal.Release(pa);
+            if (pb != IntPtr.Zero) System.Runtime.InteropServices.Marshal.Release(pb);
+        }
+    }
+
+    void IVsWindowFrameEvents.OnFrameDestroyed(IVsWindowFrame frame)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread(); // the shell raises these on the UI thread
+        if (!IsSameFrame(frame, _frame)) return;
+        // Closing the window without choosing means "no" - same reading as dismissing the InfoBar.
+        // Re-entrant when Resolve closed the frame itself; the _resolved guard absorbs that.
+        if (!_resolved) Log.Info($"diff window closed without a decision -> rejecting ({_tabName})");
+        Resolve(false);
+    }
+
+    void IVsWindowFrameEvents.OnFrameCreated(IVsWindowFrame frame) { }
+    void IVsWindowFrameEvents.OnFrameIsVisibleChanged(IVsWindowFrame frame, bool newIsVisible) { }
+    void IVsWindowFrameEvents.OnFrameIsOnScreenChanged(IVsWindowFrame frame, bool newIsOnScreen) { }
+    void IVsWindowFrameEvents.OnActiveFrameChanged(IVsWindowFrame oldFrame, IVsWindowFrame newFrame) { }
 
     /// <summary>Close this diff in response to the CLI's close_tab/closeAllDiffTabs (reject if pending).</summary>
     public void CloseExternally()
@@ -164,6 +243,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents
         if (_resolved) return;
         _resolved = true;
         DiffRegistry.Unregister(_tabName);
+        UnadviseFrameEvents(); // before CloseFrame below, which would otherwise re-enter through OnFrameDestroyed
 
         if (accepted && _writeBack)
         {

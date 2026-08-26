@@ -62,11 +62,19 @@ try {
             $j = Get-Content -Raw $f.FullName | ConvertFrom-Json
             if ($j.ideName -ne 'Visual Studio') { continue }
             $ws = if ($j.workspaceFolders) { [string]$j.workspaceFolders[0] } else { '' }
-            # Separator-aware prefix match (case-insensitive, / and \ equivalent): 'C:\work\app' must
-            # NOT match a session in 'C:\work\app-service'.
+            # Separator-aware match (case-insensitive, / and \ equivalent): 'C:\work\app' must NOT match a
+            # session in 'C:\work\app-service'. Containment counts BOTH ways, ranked: an exact match beats a
+            # session inside the workspace, which beats a workspace inside the session (open a .sln from a
+            # subfolder, run claude from the repo root - still this bridge's work). Ties break toward the
+            # more specific workspace, so a nested VS instance wins over its parent.
             $wsN = ($ws -replace '/', '\').TrimEnd('\'); $cwdN = ([string]$p.cwd -replace '/', '\').TrimEnd('\')
-            $match = [bool]($wsN -and $cwdN -and (($cwdN -eq $wsN) -or ($cwdN -like ($wsN + '\*'))))
-            $cands += [pscustomobject]@{ Port = [int]$f.BaseName; Token = $j.authToken; Score = (([int]$match) * 1000000 + $ws.Length) }
+            $rank = 0
+            if ($wsN -and $cwdN) {
+                if     ($cwdN -eq $wsN)             { $rank = 3 }
+                elseif ($cwdN -like ($wsN + '\*'))  { $rank = 2 }
+                elseif ($wsN -like ($cwdN + '\*'))  { $rank = 1 }
+            }
+            $cands += [pscustomobject]@{ Port = [int]$f.BaseName; Token = $j.authToken; Score = ($rank * 1000000 + $ws.Length) }
         } catch { }
     }
     $port = $null; $token = $null

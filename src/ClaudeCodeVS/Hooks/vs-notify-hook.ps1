@@ -32,8 +32,15 @@ try {
             # Separator-aware prefix match (case-insensitive, / and \ equivalent): 'C:\work\app' must
             # NOT match a session in 'C:\work\app-service'.
             $wsN = ($ws -replace '/', '\').TrimEnd('\'); $cwdN = ([string]$p.cwd -replace '/', '\').TrimEnd('\')
-            $match = [bool]($wsN -and $cwdN -and (($cwdN -eq $wsN) -or ($cwdN -like ($wsN + '\*'))))
-            $cands += [pscustomobject]@{ Port = [int]$f.BaseName; Token = $j.authToken; Score = (([int]$match) * 1000000 + $ws.Length) }
+            # Containment counts BOTH ways, ranked (see vs-permission-hook.ps1 for the full rationale):
+            # exact > session inside workspace > workspace inside session > unrelated.
+            $rank = 0
+            if ($wsN -and $cwdN) {
+                if     ($cwdN -eq $wsN)             { $rank = 3 }
+                elseif ($cwdN -like ($wsN + '\*'))  { $rank = 2 }
+                elseif ($wsN -like ($cwdN + '\*'))  { $rank = 1 }
+            }
+            $cands += [pscustomobject]@{ Port = [int]$f.BaseName; Token = $j.authToken; Score = ($rank * 1000000 + $ws.Length) }
         } catch { }
     }
     $port = $null; $token = $null

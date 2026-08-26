@@ -161,6 +161,11 @@ internal sealed class BridgeHost : IDisposable
         // Single-gate: the PreToolUse hook POSTs to /permission, which routes here to show the diff.
         _server.PermissionHandler = ShowPermissionDiffAsync;
 
+        // Keep the panel's run-wild checkbox honest between edits: every owned hook POST that carries a
+        // permission mode refreshes it, so a shift+tab out of auto mode unlocks the toggle at the next
+        // prompt or turn end instead of waiting for an edit that may never come.
+        _server.PermissionModeObserved = mode => Ui.BridgeStatus.SetCliPermissionMode(mode);
+
         // Stats: the Stop hook POSTs the transcript path to /usage; we parse it for tokens/cost.
         _server.UsageHandler = UsageTracker.UpdateFromTranscriptAsync;
 
@@ -509,6 +514,12 @@ internal sealed class BridgeHost : IDisposable
     /// </summary>
     private static IEnumerable<IIdeTool> BuildDebugTools(Debugging.DebuggerDriver driver, Debugging.DataBreakpointBridge dataBp)
     {
+        // Build + Output window - the compile half of the fix-verify loop (docs/BUILD.md). vs_build is what
+        // makes getDiagnostics honest: the Error List is populated by the IDE's build, so without a tool to
+        // drive it the model reads whatever the last manual Ctrl+Shift+B left behind.
+        yield return new VsBuildTool();
+        yield return new VsReadOutputTool();
+
         // Test integration - VS's Test Explorer engine as a discover -> run -> debug -> catch loop (docs/TESTING.md).
         var testRunner = new Testing.TestRunner();
         yield return new VsListTestsTool(testRunner);   // discover (Roslyn)

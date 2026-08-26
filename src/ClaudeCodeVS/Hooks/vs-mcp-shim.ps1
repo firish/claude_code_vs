@@ -51,8 +51,17 @@ function Resolve-Bridge {
             $j = Get-Content -Raw $f.FullName | ConvertFrom-Json
             if ($j.ideName -ne 'Visual Studio') { continue }
             $ws = if ($j.workspaceFolders) { [string]$j.workspaceFolders[0] } else { '' }
-            $match = [bool]($ws -and $cwd -and ($cwd -like ($ws + '*')))
-            $cands += [pscustomobject]@{ Port = [int]$f.BaseName; Token = $j.authToken; Score = (([int]$match) * 1000000 + $ws.Length) }
+            # Separator-aware, containment BOTH ways, ranked (see vs-permission-hook.ps1 for the full
+            # rationale): exact > session inside workspace > workspace inside session > unrelated. The
+            # old bare '$ws + "*"' prefix also matched a sibling like 'C:\work\app-service'.
+            $wsN = ($ws -replace '/', '\').TrimEnd('\'); $cwdN = ([string]$cwd -replace '/', '\').TrimEnd('\')
+            $rank = 0
+            if ($wsN -and $cwdN) {
+                if     ($cwdN -eq $wsN)             { $rank = 3 }
+                elseif ($cwdN -like ($wsN + '\*'))  { $rank = 2 }
+                elseif ($wsN -like ($cwdN + '\*'))  { $rank = 1 }
+            }
+            $cands += [pscustomobject]@{ Port = [int]$f.BaseName; Token = $j.authToken; Score = ($rank * 1000000 + $ws.Length) }
         } catch { }
     }
     foreach ($cand in ($cands | Sort-Object Score -Descending)) {

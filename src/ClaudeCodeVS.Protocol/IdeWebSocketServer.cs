@@ -185,6 +185,21 @@ public sealed class IdeWebSocketServer
                 }
 
                 HookActivity?.Invoke(); // after the gate: foreign traffic must not look like a local session
+
+                // Refresh the session's CLI permission mode from ANY hook that carries it, not just
+                // /permission. permission_mode is common to every hook payload, but only the PreToolUse
+                // hook fires on an edit - so a session that switched out of a pre-approving mode and then
+                // did no edits left the panel's run-wild checkbox stuck checked AND disabled, with no way
+                // for the user to clear it. Every prompt (/debug-context) and every turn end (/usage) now
+                // re-samples it. Only ever SET from here: a script too old to send the field must not be
+                // read as "the mode was cleared" - /permission owns that, it always knows.
+                var observedMode = (string?)body["permissionMode"];
+                if (!string.IsNullOrEmpty(observedMode))
+                {
+                    try { PermissionModeObserved?.Invoke(observedMode); }
+                    catch (Exception e) { Log.Warn($"permission-mode observer failed: {e.Message}"); }
+                }
+
                 switch (path)
                 {
                     case "/permission": await HandlePermissionRequestAsync(ctx, body, ct); return;
@@ -256,6 +271,12 @@ public sealed class IdeWebSocketServer
     public Func<string?>? WorkspaceProvider { get; set; }
 
     /// <summary>
+    /// Raised with the session's CLI permission mode whenever an owned hook POST carries one, so the
+    /// panel tracks mode changes made with shift+tab instead of only learning about them on the next edit.
+    /// </summary>
+    public Action<string>? PermissionModeObserved { get; set; }
+
+    /// <summary>
     /// True when the POSTing session belongs to this bridge's workspace: body.cwd equals the
     /// workspace root or sits beneath it (separator-aware, case-insensitive, / == \). Fail-open on
     /// a missing cwd (older or user-owned hook script) or no open workspace.
@@ -263,13 +284,32 @@ public sealed class IdeWebSocketServer
     private bool IsOwnSession(JObject body, out string cwd)
     {
         cwd = (string?)body["cwd"] ?? "";
-        if (cwd.Length == 0) return true;
         var ws = WorkspaceProvider?.Invoke();
         if (string.IsNullOrEmpty(ws)) return true;
+
         string Norm(string p) => p.Replace('/', '\\').TrimEnd('\\');
-        string c = Norm(cwd), w = Norm(ws!);
-        return c.Equals(w, StringComparison.OrdinalIgnoreCase)
-            || c.StartsWith(w + "\\", StringComparison.OrdinalIgnoreCase);
+        string w = Norm(ws!);
+        bool Covers(string outer, string inner) =>
+            inner.Equals(outer, StringComparison.OrdinalIgnoreCase) ||
+            inner.StartsWith(outer + "\\", StringComparison.OrdinalIgnoreCase);
+
+        // The FILE is the most direct ownership signal there is: if this VS has the edited file's folder
+        // open, it can review that edit, whatever the session's cwd happens to be. /permission carries it.
+        var file = (string?)body["filePath"] ?? "";
+        if (file.Length > 0 && Covers(w, Norm(file))) return true;
+
+        if (cwd.Length == 0) return true; // older or user-owned hook script sends no cwd -> fail open
+        string c = Norm(cwd);
+
+        // Containment counts in BOTH directions. A session rooted at a PARENT of the workspace - open
+        // `demo\BuildBreak.slnx` in VS, run `claude` from `demo\` - legitimately covers that workspace.
+        // Treating it as foreign was the bug: /permission answered ask=true, the CLI fell back to its own
+        // permission prompt, and because it is IDE-connected it rendered that prompt as an openDiff. The
+        // user then saw a diff the panel's auto-accept toggle had no say over (the gate refuses before
+        // auto-accept is ever consulted) plus a terminal prompt that its Accept did not answer.
+        // Genuinely disjoint trees (C:\work\app vs C:\work\app-service) still match neither direction and
+        // stay refused, which is the multi-instance case the gate exists for.
+        return Covers(w, c) || Covers(c, w);
     }
 
     /// <summary>

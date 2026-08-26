@@ -79,6 +79,18 @@ The 1.2.0 debugger surface (see [`docs/DEBUGGER.md`](docs/DEBUGGER.md)) has clea
 
 ---
 
+## Build integration (`vs_build` + `vs_read_output`) — next steps
+
+Shipped: the IDE's own build driven asynchronously with structured Error List diagnostics, and Output-window pane reads (`docs/BUILD.md`). Remaining, in priority order:
+
+- **Error codes as a first-class field.** `IVsTaskItem` exposes the message text but not the `CS0103` / `MSB4018` code. The code lives in the Error List's **Code** column, which means the `Microsoft.VisualStudio.Shell.TableManager` surface (`IErrorList` → `ITableEntriesSnapshot` → `StandardTableKeyNames.ErrorCode`) rather than the task-list interface we read today. Worth it: a code is what turns an error into a lookup.
+- **Build rows vs IntelliSense rows.** The same TableManager work gets `StandardTableKeyNames.ErrorSource` (`BuildTool` vs `IntelliSense`), which would let `vs_build` report *only what this build produced* and drop the `diagnosticsNote` caveat. These two are one piece of work; do them together.
+- **Per-session CLI permission mode.** `BridgeStatus` holds ONE bridge-wide mode, so two owned sessions (a second terminal, a test client) fight over it: a session in auto mode locks the panel's run-wild checkbox for a session that is in manual. 1.20.0 fixed the staleness (every prompt and turn end re-samples) but not the sharing. Key it by the hook payload's session id and show the mode of the session the panel is tracking.
+- **`since` bookmark on `vs_read_output`.** Return an opaque line cursor and accept it back, so polling a running app's Debug pane returns only what is new instead of re-sending the tail. The reader is already line-indexed, so this is small - the design question is whether the cursor should survive a pane clear (it should: fall back to the top, the way the build-log delta already does).
+- **Run tests affected by a change** (also listed under the debugger follow-ups): `vs_build` establishes what compiled, the `vs-semantic` call graph establishes what covers it, `Scope.ForSymbol` runs it. All three pieces now exist.
+- **Auto-scope to the edited project.** `vs_build` already resolves a project from any file path inside it; the model has to choose to pass one. A cheap heuristic (build the project owning the most recently edited file, fall back to the solution) would make the common case one obvious call.
+- **C++ verification.** `ErrorListReader` already serves MSVC diagnostics and `demo/CheckoutDemoCpp` exists, but the build path has not been exercised against a `.vcxproj` end to end.
+
 ## Attachments (1.12.0) — next steps
 
 Shipped: the panel attach tray (paste/drop → stage → `at_mentioned` chip in the CLI composer, token estimates, uniform any-format staging). Remaining ideas, roughly in priority order:

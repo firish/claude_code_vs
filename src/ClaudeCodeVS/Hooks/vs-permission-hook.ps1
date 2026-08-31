@@ -89,7 +89,11 @@ try {
     # cwd rides along so the bridge can refuse to gate a session that belongs to a DIFFERENT workspace
     # (the zero-match fallback above can land on the wrong VS instance - PR #28). The bridge answers
     # ask=true for those, handing the decision back to the CLI's own permission prompt.
-    $body = @{ filePath = $file; newContents = $new; transcript_path = $p.transcript_path; permissionMode = [string]$p.permission_mode; cwd = [string]$p.cwd } | ConvertTo-Json -Compress -Depth 8
+    # pid + entrypoint are how the bridge tells WHICH session this is (issue #42). This hook process is a
+    # descendant of its own CLI, so the bridge can check whether the CLI connected to it is one of our
+    # ancestors; folder paths cannot answer that, because a second Claude session in the same tree - one
+    # running under VS Code - matches them just as well and would otherwise steal the diff into VS.
+    $body = @{ filePath = $file; newContents = $new; transcript_path = $p.transcript_path; permissionMode = [string]$p.permission_mode; cwd = [string]$p.cwd; pid = $PID; entrypoint = [string]$env:CLAUDE_CODE_ENTRYPOINT } | ConvertTo-Json -Compress -Depth 8
     # Send the body as explicit UTF-8 bytes; Invoke-RestMethod's default string encoding mangles
     # non-ASCII content (em-dashes, smart quotes) into invalid JSON.
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
@@ -99,9 +103,11 @@ try {
         -Body $bytes -TimeoutSec 86400
 
     if ($resp.ask) {
-        # The bridge declined to gate: this session's folder is outside that VS's workspace, so the
-        # decision belongs to the CLI's own permission prompt - never auto-allow a foreign session.
-        Emit 'ask' 'This session is outside the reachable Visual Studio workspace - review in the terminal.'
+        # The bridge declined to gate: this POST is not from the session connected to that Visual Studio.
+        # Exit with NO decision rather than 'ask', so the CLI simply runs its normal permission flow -
+        # which, if this session belongs to another IDE, means that IDE shows its own diff. Emitting 'ask'
+        # here would instead FORCE a prompt, overriding a user who had chosen acceptEdits (issue #42).
+        exit 0
     }
     elseif ($resp.allow) {
         Emit 'allow' 'Accepted in Visual Studio diff'

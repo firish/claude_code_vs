@@ -52,7 +52,8 @@ try {
     # (the zero-match fallback above can land on the wrong VS instance - PR #28). permissionMode rides
     # along so the panel's run-wild checkbox tracks a shift+tab mode change at the next turn end, rather
     # than staying stuck until the session happens to make an edit.
-    $body = @{ transcript_path = $transcript; cwd = [string]$p.cwd; permissionMode = [string]$p.permission_mode } | ConvertTo-Json -Compress
+    # pid + entrypoint identify WHICH session this is - see vs-permission-hook.ps1 (issue #42).
+    $body = @{ transcript_path = $transcript; cwd = [string]$p.cwd; permissionMode = [string]$p.permission_mode; pid = $PID; entrypoint = [string]$env:CLAUDE_CODE_ENTRYPOINT } | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     Invoke-RestMethod -Uri "http://127.0.0.1:$port/usage" -Method Post `
         -ContentType 'application/json; charset=utf-8' `

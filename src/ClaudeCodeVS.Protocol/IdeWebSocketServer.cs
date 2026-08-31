@@ -284,6 +284,39 @@ public sealed class IdeWebSocketServer
     private bool IsOwnSession(JObject body, out string cwd)
     {
         cwd = (string?)body["cwd"] ?? "";
+
+        // ---- 1. Session IDENTITY, when we have it (issue #42) --------------------------------------
+        // The hook sends its own pid; a hook process is always a descendant of its CLI. So if the pid
+        // that POSTed sits under a CLI connected to THIS bridge, the POST is ours - and if it sits under
+        // no connected CLI, it belongs to somebody else's session no matter how well the folders line up.
+        // This is the only check that can separate two Claude sessions running in the same tree, which is
+        // exactly what path geometry cannot do.
+        var hookPid = (int?)body["pid"];
+        var connected = ConnectedCliPids();
+        if (hookPid is > 0 && connected.Count > 0 && ProcessTree.Available)
+        {
+            foreach (var cliPid in connected)
+                if (ProcessTree.IsSelfOrAncestor(cliPid, hookPid.Value)) return true;
+
+            Log.Info($"hook POST from pid {hookPid} is not under any CLI connected here "
+                   + $"(connected: {string.Join(", ", connected)}) - not this bridge's session");
+            return false;
+        }
+
+        // ---- 2. Fallbacks, for when identity is unavailable ------------------------------------------
+        // Reached when the CLI never sent ide_connected, when nothing is connected at all, or when an
+        // older hook script did not send its pid. Everything below is a heuristic.
+
+        // A session another IDE launched is not ours, whatever the folders say. CLAUDE_CODE_ENTRYPOINT is
+        // undocumented, so it only ever ADDS a refusal - it is never the reason we accept.
+        var entrypoint = (string?)body["entrypoint"] ?? "";
+        if (entrypoint.IndexOf("vscode", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            entrypoint.IndexOf("jetbrains", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            Log.Info($"hook POST from a '{entrypoint}' session - another IDE owns it");
+            return false;
+        }
+
         var ws = WorkspaceProvider?.Invoke();
         if (string.IsNullOrEmpty(ws)) return true;
 
@@ -502,6 +535,40 @@ public sealed class IdeWebSocketServer
         catch { /* client gave up */ }
     }
 
+    /// <summary>
+    /// Remember the CLI's pid from its `ide_connected` notification (sent right after the handshake). The
+    /// MCP dispatcher has no use for this notification and drops it, but it is the one piece of hard
+    /// session identity the bridge ever receives, and the edit gate needs it: without it, "is this hook
+    /// POST from MY session" can only be answered by comparing folder paths, which a SECOND Claude session
+    /// in the same tree - one running under VS Code, say - matches exactly as well (issue #42).
+    /// </summary>
+    private static void CaptureCliPid(Connection conn, string json)
+    {
+        if (conn.CliPid is not null) return;
+        if (json.IndexOf("ide_connected", StringComparison.Ordinal) < 0) return;
+        try
+        {
+            var root = JObject.Parse(json);
+            if ((string?)root["method"] != "ide_connected") return;
+            var pid = (int?)root["params"]?["pid"];
+            if (pid is > 0)
+            {
+                conn.CliPid = pid;
+                Log.Info($"CLI session identified: pid {pid} (edit gate will only answer for this process tree)");
+            }
+        }
+        catch { /* malformed notification - stay on the path-based fallback */ }
+    }
+
+    /// <summary>Process ids of the CLI sessions currently connected to this bridge.</summary>
+    private List<int> ConnectedCliPids()
+    {
+        var pids = new List<int>();
+        foreach (var c in _connections.Keys)
+            if (c.CliPid is int p) pids.Add(p);
+        return pids;
+    }
+
     private async Task ReceiveLoopAsync(Connection conn, CancellationToken ct)
     {
         var ws = conn.Socket;
@@ -534,6 +601,8 @@ public sealed class IdeWebSocketServer
             var json = Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
             message.SetLength(0);
             Log.Frame(inbound: true, json);
+
+            CaptureCliPid(conn, json);
 
             // Dispatch off the receive loop so a deferred tool call (openDiff blocks until the user
             // decides) doesn't stall reading subsequent frames.
@@ -584,6 +653,13 @@ public sealed class IdeWebSocketServer
     {
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         public WebSocket Socket { get; } = socket;
+
+        /// <summary>
+        /// The process id of the CLI on the other end, from its `ide_connected` notification. This is the
+        /// bridge's only hard answer to "WHICH session am I talking to" - everything else (cwd, workspace
+        /// paths) is geometry that a second session in the same tree matches just as well.
+        /// </summary>
+        public int? CliPid { get; set; }
 
         public async Task SendAsync(string json, CancellationToken ct)
         {

@@ -51,7 +51,8 @@ try {
 
     # cwd rides along so the bridge can ignore a session that belongs to a different workspace
     # (the zero-match fallback above can land on the wrong VS instance - PR #28).
-    $body = @{ message = $msg; cwd = [string]$p.cwd } | ConvertTo-Json -Compress
+    # pid + entrypoint identify WHICH session this is - see vs-permission-hook.ps1 (issue #42).
+    $body = @{ message = $msg; cwd = [string]$p.cwd; pid = $PID; entrypoint = [string]$env:CLAUDE_CODE_ENTRYPOINT } | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     Invoke-RestMethod -Uri "http://127.0.0.1:$port/notify" -Method Post `
         -ContentType 'application/json; charset=utf-8' `

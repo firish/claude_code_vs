@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.20.1 - 2026-08-29
+
+### Fixes
+
+- **A second Claude session no longer sends its diffs to Visual Studio** ([#42](https://github.com/firish/claude_code_vs/issues/42), reported by [@cdturner](https://github.com/cdturner)). Run Claude in VS Code on the same folder you have open in Visual Studio, and every edit that session made opened as a diff in **Visual Studio** instead of in VS Code where it belonged.
+
+  The cause: the extension's edit-gate hook lives in the workspace's `.claude/settings.json`, so *every* Claude session running in that folder loads it - including one launched from another editor - and it then routed its permission decision to whichever Visual Studio bridge was listening. The check it made was "does this session's folder belong to my workspace", which a second session in the same tree satisfies exactly as well as the first.
+
+  The bridge now identifies sessions rather than folders. Each hook reports its own process, the bridge remembers which process each connected session is (it was already being told and discarding it), and a request is answered only if it came from a session actually connected to *that* Visual Studio. Two sessions in one folder are now told apart. When the extension declines, it stays silent instead of forcing a prompt, so the other editor's normal approval flow runs untouched - previously that also overrode anyone working in acceptEdits mode.
+
 ## 1.20.0 - 2026-08-25
 
 The compile loop, closed. Two new tools on the `vs-debug` server, both ungated. Full reference: [`docs/BUILD.md`](docs/BUILD.md).

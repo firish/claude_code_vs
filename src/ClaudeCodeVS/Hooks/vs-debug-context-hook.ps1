@@ -53,7 +53,8 @@ try {
 
     # permissionMode rides along so the panel's run-wild checkbox tracks a shift+tab mode change at the
     # next prompt, rather than staying stuck until the session happens to make an edit.
-    $body = @{ cwd = $p.cwd; permissionMode = [string]$p.permission_mode } | ConvertTo-Json -Compress
+    # pid + entrypoint identify WHICH session this is - see vs-permission-hook.ps1 (issue #42).
+    $body = @{ cwd = $p.cwd; permissionMode = [string]$p.permission_mode; pid = $PID; entrypoint = [string]$env:CLAUDE_CODE_ENTRYPOINT } | ConvertTo-Json -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     # Short timeout on purpose: the bridge itself caps the UI-thread read at ~2s and answers fast (real
     # state when paused, "unknown" when the UI thread is busy). We only need headroom over that. Keeping

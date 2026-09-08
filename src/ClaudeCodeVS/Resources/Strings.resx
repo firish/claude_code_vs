@@ -223,7 +223,7 @@
   <!-- MarqueeNoticeText is REWRITTEN per marquee release (see Ui/UpdateNotice.cs) - both resx files
        in the same change. Unused while UpdateNotice.MarqueeVersion is null. -->
   <data name="MarqueeNoticeText" xml:space="preserve">
-    <value>New: right-click any code for Explain, Fix Errors, Generate Documentation, and Add Comments - Alt+K adds your selection to the chat. And the panel's attach tray takes the screenshot pastes the terminal can't.</value>
+    <value>New: the panel now lists every change Claude makes, so you can click straight to the line it edited. Claude can also build your solution with Visual Studio's own build and read the Output window, including the exceptions your app swallows.</value>
   </data>
   <data name="ReleaseNotesLink" xml:space="preserve">
     <value>Release notes</value>
@@ -236,5 +236,22 @@
   </data>
   <data name="TipRunWildOn" xml:space="preserve">
     <value>Run wild is on: edits now apply without the diff. Tip: press Shift+Tab in the Claude terminal to switch the session itself to auto-accept (covers non-edit prompts too).</value>
+  </data>
+  <data name="EditsLabel" xml:space="preserve">
+    <value>Edits this turn</value>
+  </data>
+  <data name="EditsCountFormat" xml:space="preserve">
+    <value>Edits this turn ({0})</value>
+  </data>
+  <data name="EditsRewrittenFormat" xml:space="preserve">
+    <value>whole file, {0} lines</value>
+  </data>
+  <data name="EditsTooltipFormat" xml:space="preserve">
+    <value>{0}
+Click to open at line {1}.</value>
+  </data>
+  <data name="EditsTooltipRewritten" xml:space="preserve">
+    <value>{0}
+Too much changed to list line by line. Click to open the file.</value>
   </data>
 </root>

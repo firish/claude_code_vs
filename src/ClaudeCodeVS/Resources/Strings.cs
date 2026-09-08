@@ -71,6 +71,13 @@ internal static class Strings
     internal static string PendingFormat => S(nameof(PendingFormat));
     internal static string FeedLabel => S(nameof(FeedLabel));
 
+    // ---- Panel: the "Edits this turn" jump list (issue #44) ----
+    internal static string EditsLabel => S(nameof(EditsLabel));
+    internal static string EditsCountFormat => S(nameof(EditsCountFormat));
+    internal static string EditsRewrittenFormat => S(nameof(EditsRewrittenFormat));
+    internal static string EditsTooltipFormat => S(nameof(EditsTooltipFormat));
+    internal static string EditsTooltipRewritten => S(nameof(EditsTooltipRewritten));
+
     // ---- Panel: warning banners ----
     internal static string BannerHooksOnlyTitle => S(nameof(BannerHooksOnlyTitle));
     internal static string BannerHooksOnlyText => S(nameof(BannerHooksOnlyText));

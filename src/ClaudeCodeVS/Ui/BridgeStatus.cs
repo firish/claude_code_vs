@@ -271,6 +271,58 @@ internal static class BridgeStatus
     /// <summary>Record a debugger DRIVE (continue/step/run-to/breakpoints/start-stop/freeze/set-next) for the stats strip.</summary>
     public static void RecordDebugDrive() { DebugDrives++; Changed?.Invoke(); }
 
+    // ---------------- Edits this turn (issue #44) ----------------
+
+    private const int MaxTurnEdits = 60;
+    private static readonly List<Edits.EditEntry> TurnEditList = new();
+    private static bool _editsStale; // a new turn began; the list still shows the last one until it edits
+
+    /// <summary>Jump targets for the changes Claude made in the current turn, newest last.</summary>
+    public static IReadOnlyList<Edits.EditEntry> TurnEdits
+    {
+        get { lock (Gate) return TurnEditList.ToArray(); }
+    }
+
+    /// <summary>
+    /// Append the rows for one applied edit. If a new turn has started since the last edit, the previous
+    /// turn's rows are replaced rather than appended to - deliberately done HERE and not at prompt-submit,
+    /// so the list survives while you are typing the next message, which is exactly when you might still
+    /// be reading it.
+    /// </summary>
+    public static void RecordEdits(IReadOnlyList<Edits.EditEntry> rows)
+    {
+        if (rows is null || rows.Count == 0) return;
+        lock (Gate)
+        {
+            if (_editsStale) { TurnEditList.Clear(); _editsStale = false; }
+            TurnEditList.AddRange(rows);
+            if (TurnEditList.Count > MaxTurnEdits)
+                TurnEditList.RemoveRange(0, TurnEditList.Count - MaxTurnEdits);
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>A new turn began (UserPromptSubmit). The next edit replaces the list; until then it stands.</summary>
+    public static void MarkTurnStale()
+    {
+        lock (Gate)
+        {
+            if (TurnEditList.Count == 0 || _editsStale) return;
+            _editsStale = true;
+        }
+    }
+
+    public static void ClearEdits()
+    {
+        lock (Gate)
+        {
+            if (TurnEditList.Count == 0) return;
+            TurnEditList.Clear();
+            _editsStale = false;
+        }
+        Changed?.Invoke();
+    }
+
     /// <summary>Track a diff awaiting the user's decision (shown in the pending list).</summary>
     public static void AddPending(string id, string filePath)
     {

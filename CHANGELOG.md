@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.21.0 - 2026-09-08
+
+### Features
+
+- **Jump to what Claude just changed** ([#44](https://github.com/firish/claude_code_vs/issues/44), requested by [@H-K-47](https://github.com/H-K-47)). When Claude reports `changed Pricing.cs:22` in the terminal, that text isn't clickable - Visual Studio's terminal has no link handling and the extension has no way to add any. So the panel grew an **Edits this turn** section instead: one clickable row per change, opening the file at exactly that line.
+
+  It gives you slightly more than the terminal does. Claude prints one reference per edit; the panel lists **one row per changed region**, so a single edit that touched three separate places gives you three jump targets, each with its own `+3 -1` count. A file that was largely rewritten collapses to a single row rather than flooding the list.
+
+  The section is scoped to the current turn, so it stays short and needs no scrolling in normal use. It survives while you're typing your next message - it's replaced only when the next turn actually edits something - and it disappears entirely when there's nothing to show, costing no panel space. It is also the only trace of what changed when **run wild** is on, which is when it earns its keep most.
+
+  A **Claude Code Edits** pane in the Output window keeps the same list for the whole session rather than just the current turn. Those lines render as plain text rather than links, but they are real task items, so **`F8` steps through them** the way it steps through build errors - each press opens the next change.
+
+  Only edits Claude makes through its editing tools appear. A change it makes by running a shell command is invisible to the extension and won't be listed.
+
 ## 1.20.1 - 2026-08-29
 
 ### Fixes

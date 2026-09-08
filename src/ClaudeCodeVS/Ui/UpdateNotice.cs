@@ -25,7 +25,7 @@ namespace ClaudeCodeVs.Ui;
 internal static class UpdateNotice
 {
     /// <summary>Null = this release ships silently. Set to the release version to arm (see class doc).</summary>
-    private static readonly string? MarqueeVersion = "1.18.1"; // ARMED: the right-click actions + attach tray notice
+    private static readonly string? MarqueeVersion = "1.21.0"; // ARMED: jump-to-edit + the build/output tools
 
     private const string ReleaseNotesUrl = "https://github.com/firish/claude_code_vs/releases";
     private const string Collection = "ClaudeCodeVS";

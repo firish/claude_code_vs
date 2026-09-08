@@ -59,6 +59,9 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly Button _attachClear;
     private readonly TextBlock _attachSummary;
     private readonly DispatcherTimer _timer;
+    private readonly Border _editsCard;
+    private readonly TextBlock _editsHeader;
+    private readonly ItemsControl _editsList;
     private readonly StackPanel _costRow;
     private readonly TextBlock _costText;
     private readonly Button _costButton;
@@ -72,7 +75,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         FontScale.BindRoot(this);
 
         var root = new Grid { Margin = new Thickness(10, 8, 10, 8) };
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < 8; i++)
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // feed
 
@@ -243,7 +246,25 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         Grid.SetRow(_pendingCard, 4);
 
-        // ---- Row 5: attachments (drop/paste target + staged chips) ----
+        // ---- Row 5: edits this turn (collapsed when none) ----
+        // Issue #44: the CLI prints "changed Foo.cs:1234" in the terminal and VS's terminal has no link
+        // provider we can hook, so the jump targets live here instead. Scoped to the current turn (the
+        // UserPromptSubmit hook marks the list stale, the next edit replaces it) so it stays a handful of
+        // rows and needs no cap in practice. One row per HUNK, which is finer than the CLI's one per edit.
+        _editsHeader = Font(new TextBlock
+        {
+            FontWeight = FontWeights.SemiBold,
+            Opacity = 0.55,
+            Margin = new Thickness(2, 0, 0, 4),
+        }, 0.83);
+        _editsList = new ItemsControl { Margin = new Thickness(0, 0, 0, 8) };
+        var editsStack = new StackPanel();
+        editsStack.Children.Add(_editsHeader);
+        editsStack.Children.Add(_editsList);
+        _editsCard = new Border { Visibility = Visibility.Collapsed, Child = editsStack };
+        Grid.SetRow(_editsCard, 5);
+
+        // ---- Row 6: attachments (drop/paste target + staged chips) ----
         // Screenshots can't be pasted into the CLI on Windows (open upstream gap), so the panel is the
         // paste/drop point: stage the file, then push an at_mentioned so the reference lands in the
         // CLI's composer with no path typing. Chips show what's staged; × removes, click re-mentions.
@@ -297,14 +318,14 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         attachCard.DragOver += OnAttachDragOver;
         attachCard.Drop += OnAttachDrop;
-        Grid.SetRow(attachCard, 5);
+        Grid.SetRow(attachCard, 6);
 
         // Ctrl+V anywhere in the panel = the Paste image button.
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, (s, e) => PasteFromClipboard()));
 
         // ---- Row 6: feed label ----
         var feedLabel = Font(new TextBlock { Text = Strings.FeedLabel, FontWeight = FontWeights.SemiBold, Opacity = 0.55, Margin = new Thickness(2, 0, 0, 4) }, 0.83);
-        Grid.SetRow(feedLabel, 6);
+        Grid.SetRow(feedLabel, 7);
 
         // ---- Row 7: curated activity feed ----
         _feed = new ListBox
@@ -316,13 +337,14 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         ScrollViewer.SetHorizontalScrollBarVisibility(_feed, ScrollBarVisibility.Auto);
         _feed.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
-        Grid.SetRow(_feed, 7);
+        Grid.SetRow(_feed, 8);
 
         root.Children.Add(header);
         root.Children.Add(toolbarStack);
         root.Children.Add(_toolsWarningCard);
         root.Children.Add(statsCard);
         root.Children.Add(_pendingCard);
+        root.Children.Add(_editsCard);
         root.Children.Add(attachCard);
         root.Children.Add(feedLabel);
         root.Children.Add(_feed);
@@ -496,6 +518,8 @@ internal sealed class ClaudeToolWindowControl : UserControl
             _pendingCard.Visibility = Visibility.Visible;
         }
 
+        RefreshEdits();
+
         // The two-variant warning banner. Variant 1 ("hooks only"): a session's hook POSTs are reaching
         // the bridge but the IDE WebSocket never connected - claude was launched outside the extension,
         // and /ide from that terminal lights up the diff/selection channel. Variant 2 ("config not
@@ -644,6 +668,70 @@ internal sealed class ClaudeToolWindowControl : UserControl
     }
 
     /// <summary>Re-render the staged-attachment chips (called on the dispatcher via OnAttachmentsChanged).</summary>
+    /// <summary>
+    /// Render this turn's jump targets (issue #44): one row per changed hunk, newest last, each opening
+    /// the file at the change through the same Navigator the openFile tool uses. Hidden entirely when
+    /// there is nothing to show, so it costs no panel height in the common case.
+    /// </summary>
+    private void RefreshEdits()
+    {
+        var edits = BridgeStatus.TurnEdits;
+        _editsList.Items.Clear();
+        if (edits.Count == 0)
+        {
+            _editsCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        _editsCard.Visibility = Visibility.Visible;
+        _editsHeader.Text = string.Format(Strings.EditsCountFormat, edits.Count);
+
+        foreach (var edit in edits)
+        {
+            var e = edit; // capture per row
+            string label = e.Rewritten
+                ? $"{e.FileName}  ({string.Format(Strings.EditsRewrittenFormat, e.TotalLines)})"
+                : $"{e.FileName}:{e.LineLabel}";
+
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 1, 0, 1) };
+            var link = Font(new TextBlock
+            {
+                Text = label,
+                Cursor = Cursors.Hand,
+                ToolTip = e.Rewritten
+                    ? string.Format(Strings.EditsTooltipRewritten, e.FilePath)
+                    : string.Format(Strings.EditsTooltipFormat, e.FilePath, e.StartLine + 1),
+            }, 0.96);
+            link.SetResourceReference(ForegroundProperty, VsBrushes.ControlLinkTextKey);
+            link.MouseLeftButtonUp += (s, _) =>
+            {
+                // Already on the UI thread here (a WPF input event), which is what Navigator requires.
+                bool opened = Editor.Navigator.OpenAt(
+                    e.FilePath,
+                    e.Rewritten ? (int?)null : e.StartLine,
+                    e.Rewritten ? (int?)null : e.EndLine);
+                if (!opened)
+                    Protocol.Log.Warn($"could not open {e.FilePath} - moved or deleted since the edit");
+            };
+            row.Children.Add(link);
+
+            var change = e.ChangeLabel;
+            if (change.Length > 0)
+            {
+                var badge = Font(new TextBlock
+                {
+                    Text = "  " + change,
+                    Opacity = 0.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                }, 0.88);
+                badge.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+                row.Children.Add(badge);
+            }
+
+            _editsList.Items.Add(row);
+        }
+    }
+
     private void RefreshAttachments()
     {
         var items = Attachments.AttachmentService.Snapshot();

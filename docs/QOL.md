@@ -3,9 +3,36 @@
 The deep guides ([`DEBUGGER.md`](DEBUGGER.md), [`SEMANTIC.md`](SEMANTIC.md), [`TESTING.md`](TESTING.md)) cover what Claude can *do*. This one covers the features that smooth the daily loop of working with it: where `claude` runs, how you find out it needs you, and how you hand it things that aren't text.
 
 - [Claude in the IDE's own terminal](#claude-in-the-ides-own-terminal) (1.13.0)
+- [Jump to what Claude changed](#jump-to-what-claude-changed) (1.21.0)
 - [Notifications](#notifications) (1.11.0)
 - [Attach a screenshot, or any file](#attach-a-screenshot-or-any-file) (1.12.0)
 - [Troubleshooting](#troubleshooting)
+
+## Jump to what Claude changed
+
+When Claude says it changed `Pricing.cs:22`, that text is the CLI's own output in the terminal, and Visual Studio's terminal has no link handling the extension can hook into. So the jump targets live in the panel instead.
+
+![The Claude Code panel's Edits this turn section listing changed files with line numbers and +/- counts](images/edit_list_1.png)
+
+Every change gets a row: click it and the file opens at that line. It gives you a little more than the terminal does - Claude prints one reference per edit, while the panel lists **one row per changed region**, so a single edit that touched three separate places gives three jump targets, each with its own `+3 -1` count.
+
+The list is scoped to the **current turn**, which keeps it short enough to never need scrolling in normal use. It stays put while you type your next message and is replaced only when the next turn actually edits something, so it is never yanked away mid-read. When there is nothing to show it disappears completely and costs no panel height.
+
+It matters most with **run wild** on. No diff opens in that mode, so this list is the only record of what changed.
+
+A file that was largely rewritten collapses to a single `whole file, 340 lines` row rather than flooding the section with hundreds of links.
+
+### The same list for the whole session
+
+The panel covers the current turn. For everything since the session started, the Output window grows a **Claude Code Edits** pane:
+
+![The Claude Code Edits pane in the Output window listing edits in file(line) format](images/edit_list_2.png)
+
+The lines render as plain text rather than hyperlinks, but they are real task items, so **`F8` steps through them** exactly as it steps through build errors - each press opens the next change. Handy for walking a long session's worth of edits without touching the mouse.
+
+### What it doesn't catch
+
+Only edits Claude makes through its editing tools appear. If it changes a file by running a shell command (a `sed -i`, a redirect), the extension never sees it and it won't be listed. The section is called *Edits* rather than *Changes* for that reason.
 
 ## Claude in the IDE's own terminal
 

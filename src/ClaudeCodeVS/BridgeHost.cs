@@ -232,6 +232,12 @@ internal sealed class BridgeHost : IDisposable
         // CLI's own choice while it pre-approves edits.
         Ui.BridgeStatus.SetCliPermissionMode(string.IsNullOrEmpty(permissionMode) ? null : permissionMode);
 
+        // Snapshot the file BEFORE answering: this is a PreToolUse hook, so the CLI has not written yet
+        // and what is on disk right now is the "before" side of the change. Diffing it against the
+        // proposed content is what gives the Edits panel a line number per hunk (issue #44).
+        string? beforeContents = TryReadForEditLog(filePath);
+        void RecordApplied() => RecordEditRows(filePath, beforeContents, newContents);
+
         // Honor the CLI's own permission mode (issue #17): when the user put the session in a mode that
         // pre-approves edits - including shift+tab's "auto mode", which reports 'auto' (issue #38) - our
         // gate must not be stricter than that explicit choice. Older CLIs send no mode -> gate as always.
@@ -239,6 +245,7 @@ internal sealed class BridgeHost : IDisposable
         {
             Log.Info($"CLI permission mode '{permissionMode}' - allowing {filePath} without the diff");
             Ui.BridgeStatus.RecordDecision(accepted: true);
+            RecordApplied();
             ScheduleReload(filePath);
             return (true, null);
         }
@@ -260,11 +267,13 @@ internal sealed class BridgeHost : IDisposable
             return (true, null);
         }
 
-        // Run-wild: when auto-accept is on, allow immediately without opening the diff.
+        // Run-wild: when auto-accept is on, allow immediately without opening the diff. The Edits list is
+        // the only trace of what changed in this mode, which is exactly when it earns its keep.
         if (Ui.BridgeStatus.AutoAcceptEdits)
         {
             Log.Info($"auto-accept on: allowing {filePath} without review");
             Ui.BridgeStatus.RecordDecision(accepted: true);
+            RecordApplied();
             ScheduleReload(filePath);
             return (true, null);
         }
@@ -290,8 +299,51 @@ internal sealed class BridgeHost : IDisposable
         Ui.BridgeStatus.RemovePending(tab);
         Ui.BridgeStatus.RecordDecision(d.Accepted);
         if (d.Accepted)
+        {
+            RecordApplied(); // only applied edits get a row - the list means "what is in your files now"
             ScheduleReload(filePath);
+        }
         return (d.Accepted, d.RejectReason);
+    }
+
+    /// <summary>The file's current bytes, for diffing against a proposed edit. Null when it's a new file.</summary>
+    private static string? TryReadForEditLog(string filePath)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(filePath) || !System.IO.File.Exists(filePath)) return null;
+            var info = new System.IO.FileInfo(filePath);
+            if (info.Length > 4 * 1024 * 1024) return null; // a diff this big would collapse anyway
+            return System.IO.File.ReadAllText(filePath);
+        }
+        catch { return null; } // locked or unreadable -> no rows, never a failed edit
+    }
+
+    /// <summary>Diff an applied edit into jump targets and hand them to the panel. Best-effort throughout.</summary>
+    private static void RecordEditRows(string filePath, string? beforeContents, string newContents)
+    {
+        try
+        {
+            var summary = Edits.EditHunks.Compute(beforeContents, newContents);
+            var rows = Edits.EditEntry.From(filePath, summary);
+            if (rows.Count == 0) return;
+
+            Ui.BridgeStatus.RecordEdits(rows); // panel: this turn, compact
+
+            // Output pane: the whole session, double-clickable. Task items are UI-thread-only, and we're
+            // on a hook handler thread here, so hop. Fire-and-forget: a missing log must never fail an edit.
+#pragma warning disable VSSDK007
+            ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Edits.EditOutputLog.Append(rows);
+            }).FileAndForget("claudecodevs/editOutputLog");
+#pragma warning restore VSSDK007
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"could not summarize the edit to {filePath}: {e.Message}");
+        }
     }
 
     /// <summary>
@@ -349,6 +401,11 @@ internal sealed class BridgeHost : IDisposable
     /// </summary>
     private async Task<string> GetDebugContextAsync(CancellationToken ct)
     {
+        // This hook is UserPromptSubmit, so reaching it means a new turn just began. Mark the Edits list
+        // stale rather than clearing it: the previous turn's jump targets stay readable while the user
+        // types, and get replaced by the first edit of the new turn (issue #44).
+        Ui.BridgeStatus.MarkTurnStale();
+
         try
         {
             // Bound the UI-thread hop. This hook runs on EVERY prompt; if VS's main thread is busy (a

@@ -223,7 +223,7 @@
 
   <!-- Notifications -->
   <data name="MarqueeNoticeText" xml:space="preserve">
-    <value>新功能：在任意代码上点击右键即可使用“解释”“修复错误”“生成文档”和“添加注释”，按 Alt+K 可将选中内容添加到对话。面板的附件栏还能接收终端无法粘贴的截图。</value>
+    <value>新功能：面板现在会列出 Claude 的每一处改动，点击即可跳转到对应代码行。Claude 还能用 Visual Studio 自带的生成来编译解决方案，并读取输出窗口，包括应用内被吞掉的异常。</value>
   </data>
   <data name="ReleaseNotesLink" xml:space="preserve">
     <value>版本说明</value>
@@ -236,5 +236,22 @@
   </data>
   <data name="TipRunWildOn" xml:space="preserve">
     <value>放手模式已开启：现在编辑将直接应用，不再打开差异审查。提示：在 Claude 终端中按 Shift+Tab 可将会话本身切换为自动接受（也涵盖非编辑类的确认）。</value>
+  </data>
+  <data name="EditsLabel" xml:space="preserve">
+    <value>本轮编辑</value>
+  </data>
+  <data name="EditsCountFormat" xml:space="preserve">
+    <value>本轮编辑（{0}）</value>
+  </data>
+  <data name="EditsRewrittenFormat" xml:space="preserve">
+    <value>整个文件，共 {0} 行</value>
+  </data>
+  <data name="EditsTooltipFormat" xml:space="preserve">
+    <value>{0}
+点击可跳转到第 {1} 行。</value>
+  </data>
+  <data name="EditsTooltipRewritten" xml:space="preserve">
+    <value>{0}
+改动过多，无法逐行列出。点击可打开该文件。</value>
   </data>
 </root>

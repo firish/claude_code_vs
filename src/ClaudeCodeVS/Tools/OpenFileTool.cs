@@ -48,30 +48,8 @@ internal sealed class OpenFileTool : IIdeTool
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
 
-        VsShellUtilities.OpenDocument(
-            ServiceProvider.GlobalProvider,
-            path!,
-            VSConstants.LOGVIEWID.TextView_guid,
-            out _,
-            out _,
-            out IVsWindowFrame frame);
-
-        if (makeFrontmost)
-            frame.Show();
-
-        if (startLine.HasValue)
-        {
-            var view = VsShellUtilities.GetTextView(frame);
-            if (view is not null)
-            {
-                int sl = Math.Max(0, startLine.Value);
-                int el = Math.Max(sl, endLine ?? startLine.Value);
-
-                view.SetSelection(sl, 0, el, 0);
-                var span = new TextSpan { iStartLine = sl, iStartIndex = 0, iEndLine = el, iEndIndex = 0 };
-                view.EnsureSpanVisible(span);
-            }
-        }
+        // Shared with the panel's Edits list, so a jump-to-change behaves exactly like the CLI's openFile.
+        ClaudeCodeVs.Editor.Navigator.OpenAt(path!, startLine, endLine, makeFrontmost);
 
         Log.Info($"openFile: {path} (line {startLine?.ToString() ?? "-"})");
         return new JObject { ["opened"] = true, ["filePath"] = path };

@@ -81,15 +81,19 @@ internal static class TestClient
         asserts.Check("openFile: opened=true", TryParse(open.text)?["opened"]?.GetValue<bool>() == true);
 
         // 9) openDiff: the deferred one. Server must block, then resolve. In --auto-accept-diffs
-        //    mode it returns the verbatim string "DIFF_ACCEPTED".
+        //    mode it returns the accept shape the CLI acts on: a FILE_SAVED block, then a second
+        //    block carrying the final contents.
+        const string proposed = "// proposed by the spike test\n";
         var diff = await rpc.CallToolAsync("openDiff", new JsonObject
         {
             ["old_file_path"] = "/tmp/Example.cs",
             ["new_file_path"] = "/tmp/Example.cs",
-            ["new_file_contents"] = "// proposed by the spike test\n",
+            ["new_file_contents"] = proposed,
             ["tab_name"] = "spike-selftest-diff",
         }, ct);
-        asserts.Check("openDiff: returns verbatim DIFF_ACCEPTED", diff.text == "DIFF_ACCEPTED");
+        asserts.Check("openDiff: block 0 is FILE_SAVED", diff.text == "FILE_SAVED");
+        asserts.Check("openDiff: block 1 carries the final contents",
+            diff.blocks.Length == 2 && diff.blocks[1] == proposed);
         asserts.Check("openDiff: not flagged isError", !diff.isError);
 
         // 10) unknown tool surfaces an MCP tool error (isError), not a transport crash.
@@ -147,14 +151,20 @@ internal static class TestClient
         public Task NotifyAsync(string method, JsonNode @params, CancellationToken ct)
             => SendAsync(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method, ["params"] = @params }, ct);
 
-        /// <summary>Call a tool and unwrap the MCP CallToolResult into (text, isError).</summary>
-        public async Task<(string text, bool isError)> CallToolAsync(string name, JsonNode args, CancellationToken ct)
+        /// <summary>
+        /// Call a tool and unwrap the MCP CallToolResult into (text, isError, blocks): text is the first
+        /// content block, blocks is every text block in order (openDiff's accept has two).
+        /// </summary>
+        public async Task<(string text, bool isError, string[] blocks)> CallToolAsync(string name, JsonNode args, CancellationToken ct)
         {
             var result = await RequestAsync("tools/call",
                 new JsonObject { ["name"] = name, ["arguments"] = args }, ct);
-            var text = result?["content"]?[0]?["text"]?.GetValue<string>() ?? "";
+            var blocks = (result?["content"] as JsonArray)?
+                .Select(b => b?["text"]?.GetValue<string>() ?? "")
+                .ToArray() ?? Array.Empty<string>();
+            var text = blocks.Length > 0 ? blocks[0] : "";
             var isError = result?["isError"]?.GetValue<bool>() ?? false;
-            return (text, isError);
+            return (text, isError, blocks);
         }
 
         private async Task SendAsync(JsonNode node, CancellationToken ct)

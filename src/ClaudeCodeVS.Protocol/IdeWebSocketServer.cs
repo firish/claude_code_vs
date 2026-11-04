@@ -8,6 +8,38 @@ using Newtonsoft.Json.Linq;
 
 namespace ClaudeCodeVs.Protocol;
 
+/// <summary>One PreToolUse edit as the permission hook reports it.</summary>
+public sealed class PermissionRequest
+{
+    public string FilePath { get; set; } = "";
+    /// <summary>The file as it would read after the edit (the hook reconstructs it).</summary>
+    public string NewContents { get; set; } = "";
+    /// <summary>The CLI's own permission mode ("default" | "plan" | "acceptEdits" | "auto" | "dontAsk" |
+    /// "bypassPermissions"; null on older CLIs) - the handler allows without a diff for the pre-approving
+    /// ones (issues #17, #38).</summary>
+    public string? PermissionMode { get; set; }
+    /// <summary>"Edit" | "Write" | "MultiEdit". Null from a hook script too old to send it, in which case
+    /// the user's own edits to the proposal cannot be delivered and the diff is review-only.</summary>
+    public string? ToolName { get; set; }
+    /// <summary>The session transcript, so the activity card can follow a turn even when the
+    /// UserPromptSubmit hook did not fire first.</summary>
+    public string? TranscriptPath { get; set; }
+}
+
+/// <summary>The bridge's answer to a permission request.</summary>
+public sealed class PermissionReply
+{
+    public bool Allow { get; set; }
+    /// <summary>On deny, the reason the CLI shows Claude.</summary>
+    public string? Reason { get; set; }
+    /// <summary>
+    /// When the user edited the proposal before accepting: the COMPLETE hook output JSON line (allow +
+    /// updatedInput + a note for Claude), already serialized as pure ASCII so it survives PowerShell 5.1's
+    /// console encoding. The hook prints it verbatim instead of composing its own allow.
+    /// </summary>
+    public string? HookOutput { get; set; }
+}
+
 /// <summary>
 /// Localhost-only WebSocket server (HttpListener) that speaks MCP to the CLI. Auth is validated
 /// during the HTTP upgrade - before the socket opens - so unauthorized clients never get a socket.
@@ -45,15 +77,13 @@ public sealed class IdeWebSocketServer
     public event Action? HookActivity;
 
     /// <summary>
-    /// Handles a POST /permission request from the PreToolUse hook: given (filePath, proposed new
-    /// contents), show a review diff and return whether to allow the edit (+ an optional reject reason
-    /// to feed back to the CLI). Set by the VSIX; null means no handler (fail-open). This is how
-    /// single-gate works - the hook gates the edit through our diff.
+    /// Handles a POST /permission request from the PreToolUse hook: given the proposed edit, show a
+    /// review diff and return whether to allow it (+ an optional reject reason to feed back to the CLI,
+    /// or a complete replacement hook output when the user edited the proposal before accepting). Set
+    /// by the VSIX; null means no handler (fail-open). This is how single-gate works - the hook gates
+    /// the edit through our diff.
     /// </summary>
-    /// <remarks>The third string is the CLI's own permission mode from the hook payload
-    /// ("default" | "plan" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions"; null on older
-    /// CLIs) - the handler allows without a diff for the pre-approving ones (issues #17, #38).</remarks>
-    public Func<string, string, string?, CancellationToken, Task<(bool allow, string? reason)>>? PermissionHandler { get; set; }
+    public Func<PermissionRequest, CancellationToken, Task<PermissionReply>>? PermissionHandler { get; set; }
 
     /// <summary>
     /// Handles a POST /usage request from the Stop hook: given the conversation transcript path, parse
@@ -205,7 +235,7 @@ public sealed class IdeWebSocketServer
                     case "/permission": await HandlePermissionRequestAsync(ctx, body, ct); return;
                     case "/usage": await HandleUsageRequestAsync(ctx, body, ct); return;
                     case "/notify": await HandleNotifyRequestAsync(ctx, body, ct); return;
-                    default: await HandleDebugContextRequestAsync(ctx, ct); return;
+                    default: await HandleDebugContextRequestAsync(ctx, body, ct); return;
                 }
             }
             if (isPost
@@ -275,6 +305,13 @@ public sealed class IdeWebSocketServer
     /// panel tracks mode changes made with shift+tab instead of only learning about them on the next edit.
     /// </summary>
     public Action<string>? PermissionModeObserved { get; set; }
+
+    /// <summary>
+    /// Raised when the UserPromptSubmit hook POSTs /debug-context - a turn just began - with the session
+    /// transcript path and a preview of the prompt (both null from a pre-1.22 hook script). The activity
+    /// card follows the transcript from here until <see cref="StopReceived"/>.
+    /// </summary>
+    public Action<string?, string?>? PromptSubmitted { get; set; }
 
     /// <summary>
     /// True when the POSTing session belongs to this bridge's workspace: body.cwd equals the
@@ -378,15 +415,19 @@ public sealed class IdeWebSocketServer
 
     private async Task HandlePermissionRequestAsync(HttpListenerContext ctx, JObject o, CancellationToken ct)
     {
-        bool allow = true; // fail-open: never block the CLI because our review path errored
-        string? reason = null;
+        var reply = new PermissionReply { Allow = true }; // fail-open: never block the CLI because our review path errored
         try
         {
-            var filePath = (string?)o["filePath"] ?? "";
-            var newContents = (string?)o["newContents"] ?? "";
-            var transcript = (string?)o["transcript_path"];
-            var permissionMode = (string?)o["permissionMode"];
-            Log.Info($"permission request: {filePath} ({newContents.Length} chars{(string.IsNullOrEmpty(permissionMode) ? "" : $", CLI mode {permissionMode}")})");
+            var request = new PermissionRequest
+            {
+                FilePath = (string?)o["filePath"] ?? "",
+                NewContents = (string?)o["newContents"] ?? "",
+                PermissionMode = (string?)o["permissionMode"],
+                ToolName = (string?)o["toolName"], // absent from pre-1.22 (user-owned) hook scripts
+                TranscriptPath = (string?)o["transcript_path"],
+            };
+            var transcript = request.TranscriptPath;
+            Log.Info($"permission request: {request.FilePath} ({request.NewContents.Length} chars{(string.IsNullOrEmpty(request.PermissionMode) ? "" : $", CLI mode {request.PermissionMode}")})");
 
             // Refresh token/cost stats from the transcript on each edit. The Stop hook also does this,
             // but the permission hook is the reliable trigger. Fire-and-forget so the diff isn't delayed.
@@ -394,19 +435,24 @@ public sealed class IdeWebSocketServer
                 _ = uh(transcript!, ct);
 
             var handler = PermissionHandler;
-            if (handler != null && filePath.Length > 0)
-                (allow, reason) = await handler(filePath, newContents, permissionMode, ct);
-            Log.Info($"permission decision: {(allow ? "allow" : "deny")} for {filePath}");
+            if (handler != null && request.FilePath.Length > 0)
+                reply = await handler(request, ct);
+            Log.Info($"permission decision: {(reply.Allow ? (reply.HookOutput != null ? "allow (with the user's edits)" : "allow") : "deny")} for {request.FilePath}");
         }
         catch (Exception e)
         {
             Log.Warn($"permission request failed (allowing): {e.Message}");
-            allow = true;
+            reply = new PermissionReply { Allow = true };
         }
 
         try
         {
-            var json = new JObject { ["allow"] = allow, ["reason"] = reason }.ToString(Formatting.None);
+            var json = new JObject
+            {
+                ["allow"] = reply.Allow,
+                ["reason"] = reply.Reason,
+                ["hookOutput"] = reply.HookOutput,
+            }.ToString(Formatting.None);
             var bytes = Encoding.UTF8.GetBytes(json);
             ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "application/json; charset=utf-8"; // no charset -> PS 5.1 clients decode as Latin-1 (mojibake)
@@ -462,13 +508,18 @@ public sealed class IdeWebSocketServer
         try { ctx.Response.StatusCode = 200; ctx.Response.Close(); } catch { /* client gave up */ }
     }
 
-    private async Task HandleDebugContextRequestAsync(HttpListenerContext ctx, CancellationToken ct)
+    private async Task HandleDebugContextRequestAsync(HttpListenerContext ctx, JObject body, CancellationToken ct)
     {
         string json = "{\"mode\":\"unknown\"}"; // fail-safe: the hook injects nothing on "unknown"
         try
         {
-            // The body (cwd) was consumed by the dispatch-level ownership gate; the handler itself
-            // just reads this VS instance's own debugger.
+            // This hook is UserPromptSubmit, so reaching it means a turn just began. The transcript path
+            // and prompt preview it carries (1.22+ scripts; absent from older ones) feed the panel's
+            // activity card. Signalled before the debugger read so a slow UI thread never delays it.
+            try { PromptSubmitted?.Invoke((string?)body["transcript_path"], (string?)body["prompt"]); }
+            catch (Exception e) { Log.Warn($"prompt-submitted observer failed: {e.Message}"); }
+
+            // The debugger handler itself just reads this VS instance's own debugger.
             var handler = DebugContextHandler;
             if (handler != null)
                 json = await handler(ct) ?? json;

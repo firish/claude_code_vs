@@ -6,8 +6,9 @@ namespace ClaudeCodeVs.Protocol;
 /// <summary>
 /// One handler per protocol tool. In the VSIX each implementation is backed by VS SDK calls
 /// (IVsDifferenceService, the Roslyn workspace, the editor adapters, ...). Return a plain string to
-/// send it verbatim on the wire (e.g. "DIFF_ACCEPTED"); return any other object to have it
-/// JSON-stringified; throw to surface an MCP error (isError=true). See build-plan.md §6.
+/// send it verbatim on the wire (e.g. "DIFF_REJECTED"); return a <see cref="TextBlocks"/> to send
+/// several text blocks (openDiff's accept); return any other object to have it JSON-stringified;
+/// throw to surface an MCP error (isError=true). See build-plan.md §6.
 /// </summary>
 public interface IIdeTool
 {
@@ -35,19 +36,41 @@ public sealed class ToolRegistry
     public bool TryGet(string name, out IIdeTool tool) => _tools.TryGetValue(name, out tool!);
 }
 
+/// <summary>
+/// A tool result made of several MCP text blocks instead of one. The only caller is openDiff's accept,
+/// whose wire shape is positional: block 0 is the literal <c>FILE_SAVED</c> and block 1 is the file's
+/// final contents, which is what the CLI then writes.
+/// </summary>
+public sealed class TextBlocks
+{
+    public TextBlocks(params string[] blocks) => Blocks = blocks;
+    public IReadOnlyList<string> Blocks { get; }
+}
+
 /// <summary>The outcome of a diff review: accepted, or rejected (optionally with feedback for the CLI).</summary>
 public readonly struct DiffDecision
 {
-    public DiffDecision(bool accepted, string? rejectReason = null)
+    public DiffDecision(bool accepted, string? rejectReason = null, string? finalContents = null, bool userEdited = false)
     {
         Accepted = accepted;
         RejectReason = rejectReason;
+        FinalContents = finalContents;
+        UserEdited = userEdited;
     }
 
     public bool Accepted { get; }
 
     /// <summary>On reject, optional text the user wants Claude to act on (drives reject-with-reason).</summary>
     public string? RejectReason { get; }
+
+    /// <summary>
+    /// On accept, the text of the diff's right-hand pane at the moment of the click - Claude's proposal,
+    /// or the user's edited version of it. Null when the pane could not be read (the proposal stands).
+    /// </summary>
+    public string? FinalContents { get; }
+
+    /// <summary>True when <see cref="FinalContents"/> differs from what Claude proposed.</summary>
+    public bool UserEdited { get; }
 }
 
 /// <summary>

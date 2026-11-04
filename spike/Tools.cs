@@ -7,8 +7,9 @@ namespace ClaudeCodeVs.Spike;
 /// <summary>
 /// One handler per protocol tool. The real extension will have an identical shape in src/Tools/,
 /// just backed by VS SDK calls instead of stubs. Return a plain string to send it verbatim on the
-/// wire (e.g. "DIFF_ACCEPTED"); return any other object to have it JSON-stringified. Throw to
-/// surface an MCP error (isError=true).
+/// wire (e.g. "DIFF_REJECTED"); return a <see cref="TextBlocks"/> to send several text blocks (openDiff's
+/// accept); return any other object to have it JSON-stringified. Throw to surface an MCP error
+/// (isError=true).
 /// </summary>
 internal interface IIdeTool
 {
@@ -30,6 +31,16 @@ internal sealed class ToolRegistry
     public IEnumerable<IIdeTool> All => _tools.Values;
 
     public bool TryGet(string name, out IIdeTool tool) => _tools.TryGetValue(name, out tool!);
+}
+
+/// <summary>
+/// A tool result made of several MCP text blocks instead of one - the mirror of the extension's
+/// <c>ClaudeCodeVs.Protocol.TextBlocks</c>. openDiff's accept is positional: block 0 is the literal
+/// <c>FILE_SAVED</c>, block 1 is the file's final contents, which the CLI then writes.
+/// </summary>
+internal sealed class TextBlocks(params string[] blocks)
+{
+    public IReadOnlyList<string> Blocks { get; } = blocks;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +150,10 @@ internal sealed class OpenDiffTool : IIdeTool
 
         try { File.Delete(temp); } catch { /* best effort */ }
 
-        // Plain string -> sent verbatim on the wire.
-        return accepted ? "DIFF_ACCEPTED" : "DIFF_REJECTED";
+        // The CLI recognizes exactly three replies (checked against 2.1.263): FILE_SAVED followed by a
+        // second text block with the final contents (which it applies), TAB_CLOSED, and DIFF_REJECTED.
+        // The DIFF_ACCEPTED this returned before fell into its "Not accepted" branch.
+        return accepted ? new TextBlocks("FILE_SAVED", contents) : "DIFF_REJECTED";
     }
 }
 

@@ -270,6 +270,86 @@ internal static class ContextActions
         FocusClaude(launched);
     }
 
+    // ---- Generate Tests: the function at the caret (or the selection) -> tests in the right project ---
+
+    /// <summary>
+    /// Ask for tests for the member at the caret, composed with what the solution already has: the test
+    /// project(s) and their framework (so the tests land where they belong, in the house style), whether
+    /// that project already references the code under test, and the tests that already exercise this
+    /// member (extend, don't duplicate). Then the verify loop: vs_build + vs_run_test on the new tests.
+    /// </summary>
+    public static async Task GenerateTestsAsync()
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var sel = SelectionService.Current;
+        if (sel.FilePath is null)
+        {
+            Log.Warn("Generate Tests: no active file.");
+            return;
+        }
+        var fileName = System.IO.Path.GetFileName(sel.FilePath);
+        var rel = Attachments.AttachmentService.ToWorkspaceRelative(sel.FilePath) ?? fileName;
+
+        var fn = await CodeModel.RoslynReader.GetEnclosingFunctionAsync(
+            sel.FilePath, sel.StartLine, sel.StartChar, CancellationToken.None);
+        if (fn == null && sel.IsEmpty)
+        {
+            Log.Info("Generate Tests: place the caret inside a method (needs a loaded C#/VB project), or select the code first.");
+            return;
+        }
+        if (fn is { IsTest: true })
+        {
+            Log.Info($"Generate Tests: '{fn.DisplayName}' is itself a test - use Fix This Test on it, or put the caret in the code under test.");
+            return;
+        }
+
+        var ctx = await CodeModel.RoslynReader.GetTestContextAsync(
+            sel.FilePath, sel.StartLine, sel.StartChar, CancellationToken.None);
+
+        bool launched = EnsureSessionLaunching("Generate Tests");
+        int a = (fn?.StartLine ?? sel.StartLine) + 1;
+        int b = (fn?.EndLine ?? sel.EndLineInclusive) + 1;
+        var subject = fn != null ? $"`{fn.DisplayName}`" : "the selected code";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Write unit tests for {subject} in {rel} (lines {a}-{b}, mentioned alongside this note).");
+        sb.AppendLine();
+
+        // Where the tests go. Prefer a test project that already references the code under test.
+        var home = ctx.TestProjects.FirstOrDefault(p => p.ReferencesTarget) ?? ctx.TestProjects.FirstOrDefault();
+        if (home != null)
+        {
+            sb.AppendLine($"Put them in the existing test project {home.Name} ({home.Framework}"
+                        + (home.Path != null ? $", {home.Path}" : "") + ").");
+            if (!home.ReferencesTarget && ctx.TargetProject != null)
+                sb.AppendLine($"It does not reference {ctx.TargetProject} yet - add the project reference.");
+            if (ctx.TestProjects.Count > 1)
+                sb.AppendLine("Other test projects in the solution: "
+                            + string.Join(", ", ctx.TestProjects.Where(p => p != home).Select(p => $"{p.Name} ({p.Framework})")) + ".");
+            sb.AppendLine("Follow that project's existing conventions: file and class naming, fixtures, assertion style, and how test cases are parameterized.");
+        }
+        else
+        {
+            sb.AppendLine("The solution has no test project. Propose one (xUnit unless the repo already leans another way) and confirm with me before creating it.");
+        }
+
+        if (ctx.ExistingTests.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Tests that already exercise this code - extend or complement them, don't duplicate:");
+            foreach (var t in ctx.ExistingTests) sb.AppendLine($"  - {t}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Cover the behavior this code actually has: the normal path, the boundaries, and each failure mode it handles. Don't test the framework or restate the implementation.");
+        sb.AppendLine("Then verify with the vs-debug tools: vs_build the test project, run the new tests with vs_run_test, and fix whatever fails. "
+                    + "If a test exposes a real bug in the code under test, say so instead of bending the test to pass.");
+
+        await Attachments.AttachmentService.StageTextAsync(sb.ToString(), $"tests-{fileName}-L{a}-{b}");
+        await SelectionService.MentionAsync(sel.FilePath, a - 1, b - 1, "Generate Tests");
+        FocusClaude(launched);
+    }
+
     // ---- shared ------------------------------------------------------------------------------------
 
     /// <summary>

@@ -2,11 +2,35 @@
 
 The deep guides ([`DEBUGGER.md`](DEBUGGER.md), [`SEMANTIC.md`](SEMANTIC.md), [`TESTING.md`](TESTING.md)) cover what Claude can *do*. This one covers the features that smooth the daily loop of working with it: where `claude` runs, how you find out it needs you, and how you hand it things that aren't text.
 
+- [Edit the proposal before you accept it](#edit-the-proposal-before-you-accept-it) (1.22.0)
+- [What Claude is doing right now](#what-claude-is-doing-right-now) (1.22.0)
 - [Claude in the IDE's own terminal](#claude-in-the-ides-own-terminal) (1.13.0)
 - [Jump to what Claude changed](#jump-to-what-claude-changed) (1.21.0)
 - [Notifications](#notifications) (1.11.0)
 - [Attach a screenshot, or any file](#attach-a-screenshot-or-any-file) (1.12.0)
+- [The editor context menu](#the-editor-context-menu)
 - [Troubleshooting](#troubleshooting)
+
+## Edit the proposal before you accept it
+
+The right-hand side of the review diff is a live editor, not a preview. When Claude's change is nearly right - a name you'd pick differently, a comment to trim, one line it shouldn't have touched - fix it there and click **Accept**. What gets applied is the right pane as you left it, and Claude is told that the file now holds your version rather than its proposal, so it re-reads before touching that file again instead of building on a stale picture.
+
+The info bar and the pane label both say so (`Claude proposal - editable`). Nothing changes if you don't edit: an untouched Accept applies exactly what was proposed, as before.
+
+Two edges worth knowing:
+
+- **Edit everything back to how the file already is and accept**, and the extension treats that as "leave this file alone": the CLI writes nothing, and Claude is told you reviewed the change and want the file kept as it stands.
+- **Accept cannot pick up edits when the hook script is one you've taken ownership of** (removed the `vs:auto-managed` marker) and it predates 1.22.0: the bridge needs the tool name the newer script sends to rebuild the edit. The diff then behaves exactly as it did before - review-only - and says nothing about editing.
+
+Under the hood, the edit gate is a PreToolUse hook, which is allowed to *replace the tool's input* on the way through (`updatedInput` in the hook contract). The bridge rebuilds the CLI's own `Edit`/`Write` input from the file as it is and the pane as you left it - the smallest unique region for an `Edit`, the whole content for a `Write` - and the CLI stays the only thing that writes to your files. On the `openDiff` path (a session that connected without the hook) the same thing rides the protocol's `FILE_SAVED` reply, which carries the final contents and is what the official VS Code extension sends. That reply also happens to be the one the CLI actually understands for an accept, so on that path the terminal's own permission prompt no longer lingers as a second gate after you accept in the IDE.
+
+## What Claude is doing right now
+
+During a turn the panel shows what a chat window would: an **activity card** with the elapsed time, the prompt it is working on, the tool call in flight (`⚙ Edit  Pricing.cs`, `⚙ Bash  Run the test suite`, `⚙ vs_build  BuildBreak.App`), and - when the session keeps one - Claude's own **task list** with what's done, what's in progress, and what's next. When the turn ends the card settles into `Finished · 2m 05s · 14 tool calls` until the next prompt, and it takes no panel space at all before the first turn.
+
+The card costs the session nothing. The turn boundaries come from two hooks the extension already installs (prompt submitted, turn finished); everything in between is read by following the session's transcript file, which the CLI appends to as it works - a tool call lands in it before the tool runs, its result after. There is no hook, no process, and no delay added per tool call. The price is a dependency on the transcript's undocumented shape, which the token stats already carry; if it shifts, the card shows less detail, never an error.
+
+About the task list: from CLI 2.1.268 the task tools (`TaskCreate`/`TaskUpdate`, or the older `TodoWrite`) are off by default on newer models, which plan without a written list. The card shows the list whenever the session has one and simply omits it otherwise; the extension does not opt your sessions in.
 
 ## Jump to what Claude changed
 
@@ -99,7 +123,7 @@ Direct-read images must be PNG/JPEG/GIF/WebP under 5 MB; bigger ones still attac
 
 Pushing an `@` reference and *sending* it are two different moments, and the extension moves keyboard focus based on which one you're in:
 
-- **"I'm done - send it" surfaces focus the Claude terminal for you**, so Enter sends immediately: every editor context-menu action (Explain, Add to Chat / Alt+K, Fix Errors, Generate Documentation, Add Comments, Fix This Test), a **chip click** (re-mention), and the composer's **Attach** button.
+- **"I'm done - send it" surfaces focus the Claude terminal for you**, so Enter sends immediately: every editor context-menu action (Explain, Add to Chat / Alt+K, Fix Errors, Generate Documentation, Add Comments, Generate Tests, Fix This Test), a **chip click** (re-mention), and the composer's **Attach** button.
 - **Raw paste and drag-drop keep focus in the panel** - deliberately. Staging often happens in batches (three screenshots, a couple of log files), and yanking focus to the terminal after the first paste would fight the second. When the batch is done, click any chip - it re-mentions *and* hands you the terminal.
 
 Focus is best-effort: a session the extension launched (docked tab or external console) can always be focused; a terminal you started yourself and connected with `/ide` has no handle the extension knows, so focus stays put and you click the terminal as before.
@@ -110,7 +134,9 @@ Right-click in any editor: the **Claude Code** flyout puts the common asks one c
 
 ![The Claude Code flyout in the editor context menu: Explain, Add to Chat (Alt+K), then Fix Errors, Generate Documentation, Add Comments below a separator](images/right_click_submenu.png)
 
-The separator is the design: **above it, actions that give Claude context** - *Explain* stages the selection (or, with nothing selected, the whole file) with an instruction header, and *Add to Chat* (`Alt+K`, the same shortcut as the official VS Code extension) `@`-mentions the file and line range in place. **Below it, actions that ask Claude to change the file** - *Fix Errors* bundles the selection (or file) with its actual Error List diagnostics and asks for the smallest correct fix, re-verified with `getDiagnostics`; *Generate Documentation* and *Add Comments* resolve the **function at your caret** through Roslyn (no selection needed - an accessor resolves to its property) and mention its exact line span, asking for style-matched doc comments, or explanatory comments only where the code isn't self-explanatory; *Fix This Test* (appears in test files) hands Claude the whole loop - run with `vs_run_test`, stop at the throw or catch the flaky iteration under the debugger, fix, re-run.
+The separator is the design: **above it, actions that give Claude context** - *Explain* stages the selection (or, with nothing selected, the whole file) with an instruction header, and *Add to Chat* (`Alt+K`, the same shortcut as the official VS Code extension) `@`-mentions the file and line range in place. **Below it, actions that ask Claude to change the file** - *Fix Errors* bundles the selection (or file) with its actual Error List diagnostics and asks for the smallest correct fix, re-verified with `getDiagnostics`; *Generate Documentation* and *Add Comments* resolve the **function at your caret** through Roslyn (no selection needed - an accessor resolves to its property) and mention its exact line span, asking for style-matched doc comments, or explanatory comments only where the code isn't self-explanatory; *Generate Tests* (1.22.0, appears outside test files) resolves the same function and composes the ask with what the solution already has - which project is the test project and on which framework (xUnit, NUnit, MSTest, TUnit, read from what each project compiles against), whether it already references the code under test, and which existing tests already call this member, so Claude extends rather than duplicates - then closes the loop with `vs_build` and `vs_run_test` on the new tests; *Fix This Test* (appears in test files) hands Claude the whole loop - run with `vs_run_test`, stop at the throw or catch the flaky iteration under the debugger, fix, re-run.
+
+*Generate Tests* and *Fix This Test* are complements and hide where the other shows: a file with "test" in its name gets Fix This Test, any other file gets Generate Tests.
 
 Rules every entry follows: **insert-not-submit** (references land in the CLI composer; Enter is yours), each stages a **self-describing** `.txt` (`explain-Program.cs-L17-20.txt` - the reference says what it is), the action **focuses the claude terminal** so Enter sends immediately (see [Where focus goes](#where-focus-goes-by-design)), no session running means the action **launches one**, and every edit still arrives through the **diff gate**.
 

@@ -116,6 +116,13 @@ internal sealed class McpServer
         try
         {
             object result = await tool.InvokeAsync(args, ct);
+            if (result is TextBlocks multi)
+            {
+                var content = new JsonArray();
+                foreach (var block in multi.Blocks)
+                    content.Add(new JsonObject { ["type"] = "text", ["text"] = block });
+                return new JsonObject { ["content"] = content };
+            }
             // Wire format: plain string -> verbatim; anything else -> JSON-stringified.
             string text = result is string s ? s : JsonSerializer.Serialize(result);
             return ToolResult(text, isError: false);

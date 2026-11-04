@@ -9,6 +9,8 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Task = System.Threading.Tasks.Task;
 
 namespace ClaudeCodeVs;
@@ -140,6 +142,8 @@ internal sealed class BridgeHost : IDisposable
                 return;
             }
             Ui.BridgeStatus.SetCliPermissionMode(null); // the observed mode belonged to the session that just ended
+            Activity.TranscriptTail.Abort();
+            Activity.AgentActivity.SessionEnded(); // nothing is running; the task list was that session's
 #pragma warning disable VSSDK007
             ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
@@ -175,6 +179,20 @@ internal sealed class BridgeHost : IDisposable
         // taskbar flash via the Notifier; gated by the panel's Notify toggle.
         _server.StopReceived += Ui.Notifier.TurnEnded;
         _server.NotifyHandler = (message, _) => { Ui.Notifier.NeedsAttention(message); return Task.CompletedTask; };
+
+        // Live activity (the panel's "what is Claude doing" card): the UserPromptSubmit hook opens a turn
+        // and names the transcript, the Stop hook closes it, and in between TranscriptTail reads the tool
+        // calls and task list straight out of the transcript - no extra hook, no process per tool call.
+        _server.PromptSubmitted = (transcript, prompt) =>
+        {
+            Activity.AgentActivity.TurnStarted(prompt);
+            Activity.TranscriptTail.Follow(transcript);
+        };
+        _server.StopReceived += () =>
+        {
+            Activity.TranscriptTail.Stop();   // one last read picks up the final tool_result
+            Activity.AgentActivity.TurnEnded();
+        };
 
         // Debug awareness: the UserPromptSubmit hook POSTs to /debug-context; we read the live VS
         // debugger (break location, call stack, locals) and hand it back to be injected into context.
@@ -226,11 +244,21 @@ internal sealed class BridgeHost : IDisposable
     /// CLI writes the file itself once the edit is allowed) and return whether the user accepted. The
     /// bridge's /permission endpoint calls this; the PreToolUse hook posts to that endpoint.
     /// </summary>
-    private async Task<(bool allow, string? reason)> ShowPermissionDiffAsync(string filePath, string newContents, string? permissionMode, CancellationToken ct)
+    private async Task<PermissionReply> ShowPermissionDiffAsync(PermissionRequest request, CancellationToken ct)
     {
+        string filePath = request.FilePath;
+        string newContents = request.NewContents;
+        string? permissionMode = request.PermissionMode;
+        static PermissionReply Allow() => new() { Allow = true };
+
         // Surface the session's mode to the panel: the run-wild checkbox reflects (and locks to) the
         // CLI's own choice while it pre-approves edits.
         Ui.BridgeStatus.SetCliPermissionMode(string.IsNullOrEmpty(permissionMode) ? null : permissionMode);
+
+        // An edit is proof a turn is running, even if the prompt hook never fired (a user-owned or
+        // older UserPromptSubmit script): make sure the activity card is following this transcript.
+        Activity.AgentActivity.EnsureTurn();
+        Activity.TranscriptTail.Follow(request.TranscriptPath);
 
         // Snapshot the file BEFORE answering: this is a PreToolUse hook, so the CLI has not written yet
         // and what is on disk right now is the "before" side of the change. Diffing it against the
@@ -247,7 +275,7 @@ internal sealed class BridgeHost : IDisposable
             Ui.BridgeStatus.RecordDecision(accepted: true);
             RecordApplied();
             ScheduleReload(filePath);
-            return (true, null);
+            return Allow();
         }
 
         // An unrecognized mode gates (fail-visible: the user can still accept), but says so loudly -
@@ -264,7 +292,7 @@ internal sealed class BridgeHost : IDisposable
         if (IsScratchOrMemoryPath(filePath, Ui.BridgeStatus.Workspace))
         {
             Log.Info($"scratch/memory write auto-allowed (not project code): {filePath}");
-            return (true, null);
+            return Allow();
         }
 
         // Run-wild: when auto-accept is on, allow immediately without opening the diff. The Edits list is
@@ -275,7 +303,7 @@ internal sealed class BridgeHost : IDisposable
             Ui.BridgeStatus.RecordDecision(accepted: true);
             RecordApplied();
             ScheduleReload(filePath);
-            return (true, null);
+            return Allow();
         }
 
         var tab = "perm:" + Guid.NewGuid().ToString("N");
@@ -283,12 +311,16 @@ internal sealed class BridgeHost : IDisposable
         try { System.IO.File.WriteAllText(temp, newContents); }
         catch (Exception e) { Log.Warn($"permission temp stage failed: {e.Message}"); }
 
+        // Edit-before-accept needs the tool name to rebuild the CLI's input; a hook script too old to send
+        // it gets the review-only diff it always had.
+        bool editable = Edits.EditRewrite.CanRewrite(request.ToolName);
+
         var decision = _decisions.AwaitDecisionAsync(tab);
         Ui.BridgeStatus.AddPending(tab, filePath);
         try
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-            Diff.DiffSession.Open(filePath, filePath, newContents, tab, temp, _decisions, writeBack: false);
+            Diff.DiffSession.Open(filePath, filePath, newContents, tab, temp, _decisions, writeBack: false, editable: editable);
         }
         catch (Exception e)
         {
@@ -297,13 +329,94 @@ internal sealed class BridgeHost : IDisposable
         }
         var d = await decision;
         Ui.BridgeStatus.RemovePending(tab);
+
+        if (d.Accepted && d.UserEdited && d.FinalContents != null)
+        {
+            // The user changed the right pane: the CLI must write THEIR version, not the proposal. The
+            // hook's updatedInput replaces the tool's input wholesale, so rebuild it from the file as it
+            // is now (still the "before" - this is PreToolUse) and the pane's text.
+            var reply = RewriteForUserEdit(request, d.FinalContents);
+            if (reply != null)
+            {
+                Ui.BridgeStatus.RecordDecision(reply.Allow);
+                if (reply.Allow)
+                {
+                    RecordEditRows(filePath, beforeContents, d.FinalContents);
+                    ScheduleReload(filePath);
+                }
+                return reply;
+            }
+            // Couldn't rebuild (unreadable file): fall through to the plain accept - the proposal is
+            // applied and the edits are lost, which RewriteForUserEdit has already said loudly.
+        }
+
         Ui.BridgeStatus.RecordDecision(d.Accepted);
         if (d.Accepted)
         {
             RecordApplied(); // only applied edits get a row - the list means "what is in your files now"
             ScheduleReload(filePath);
         }
-        return (d.Accepted, d.RejectReason);
+        return d.Accepted ? Allow() : new PermissionReply { Allow = false, Reason = d.RejectReason };
+    }
+
+    /// <summary>
+    /// The hook output for an accept-with-edits: allow + the rebuilt tool input + a note so the model
+    /// knows the file no longer matches its own proposal. Null when the file can't be read (nothing safe
+    /// to rebuild from); a deny when the user edited the proposal back into the file's current content.
+    /// </summary>
+    private static PermissionReply? RewriteForUserEdit(PermissionRequest request, string finalContents)
+    {
+        string? before = null;
+        try
+        {
+            if (System.IO.File.Exists(request.FilePath)) before = System.IO.File.ReadAllText(request.FilePath);
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"accepted with edits, but {request.FilePath} could not be read to rebuild the edit ({e.Message}) - "
+                   + "applying Claude's ORIGINAL proposal instead; your changes in the diff were not kept");
+            return null;
+        }
+
+        var updated = Edits.EditRewrite.BuildUpdatedInput(request.ToolName ?? "", request.FilePath, before, finalContents);
+        if (updated == null)
+        {
+            // Every proposed change was undone in the pane before Accept: the file is already what the
+            // user wants. Denying with that reason is the only way to make the CLI write nothing.
+            Log.Info($"accepted with edits that restore the current file - telling Claude to leave {request.FilePath} as it is");
+            return new PermissionReply
+            {
+                Allow = false,
+                Reason = "The user reviewed this change in the Visual Studio diff and edited it back to the "
+                       + "file's current content - they want this file left exactly as it is. Do not retry "
+                       + "this edit; continue from the file as it stands.",
+            };
+        }
+
+        var fileName = System.IO.Path.GetFileName(request.FilePath);
+        var output = new JObject
+        {
+            ["hookSpecificOutput"] = new JObject
+            {
+                ["hookEventName"] = "PreToolUse",
+                ["permissionDecision"] = "allow",
+                ["permissionDecisionReason"] = "Accepted in Visual Studio diff, with the user's edits",
+                ["updatedInput"] = updated,
+                ["additionalContext"] =
+                    $"The user edited your proposed change to {fileName} in the Visual Studio diff before accepting it, "
+                    + "so the file now contains THEIR version, which differs from what you proposed. Re-read the file "
+                    + "before editing it again, keep their changes, and continue from what is actually there.",
+            },
+        };
+
+        // Pure ASCII on purpose: the hook prints this line to stdout from PowerShell 5.1, whose console
+        // encoding is the OEM code page - a raw '—' or a Chinese comment would arrive mangled.
+        var sb = new System.Text.StringBuilder();
+        using (var sw = new System.IO.StringWriter(sb))
+        using (var jw = new JsonTextWriter(sw) { StringEscapeHandling = StringEscapeHandling.EscapeNonAscii, Formatting = Formatting.None })
+            output.WriteTo(jw);
+
+        return new PermissionReply { Allow = true, HookOutput = sb.ToString() };
     }
 
     /// <summary>The file's current bytes, for diffing against a proposed edit. Null when it's a new file.</summary>
@@ -642,6 +755,7 @@ internal sealed class BridgeHost : IDisposable
     private static IEnumerable<IIdeTool> BuildSemanticTools()
     {
         yield return new VsGetSelectionTool();         // editor selection/caret -> text + symbolId at it
+        yield return new VsSolutionModelTool();        // evaluated project graph: TFMs, resolved packages, config, analyzers
         yield return new VsDecompileTool();            // framework/NuGet metadata symbol -> decompiled C#
         yield return new VsSearchSymbolsTool();        // name -> symbolId (addressing primitive)
         yield return new VsFindReferencesTool();       // semantic find-all-references

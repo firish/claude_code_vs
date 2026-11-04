@@ -218,6 +218,27 @@
   <data name="DiffRightLabel" xml:space="preserve">
     <value>{0} (Claude proposal)</value>
   </data>
+  <data name="DiffProposesEditable" xml:space="preserve">
+    <value>Claude Code proposes changes to {0}. You can edit the right side before accepting. </value>
+  </data>
+  <data name="DiffRightLabelEditable" xml:space="preserve">
+    <value>{0} (Claude proposal - editable)</value>
+  </data>
+  <data name="ActivityWorking" xml:space="preserve">
+    <value>Working</value>
+  </data>
+  <data name="ActivityFinished" xml:space="preserve">
+    <value>Finished</value>
+  </data>
+  <data name="ActivityToolCalls" xml:space="preserve">
+    <value>{0} tool calls</value>
+  </data>
+  <data name="ActivityThinking" xml:space="preserve">
+    <value>Thinking…</value>
+  </data>
+  <data name="ActivityTasksFormat" xml:space="preserve">
+    <value>TASKS   {0}/{1} done</value>
+  </data>
 
   <!-- Notifications -->
   <!-- MarqueeNoticeText is REWRITTEN per marquee release (see Ui/UpdateNotice.cs) - both resx files

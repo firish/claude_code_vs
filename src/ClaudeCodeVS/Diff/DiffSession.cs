@@ -2,17 +2,21 @@ using System;
 using System.IO;
 using ClaudeCodeVs.Protocol;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text;
 
 namespace ClaudeCodeVs.Diff;
 
 /// <summary>
 /// Renders one proposed edit in VS's native diff viewer (IVsDifferenceService) with an Accept/Reject
 /// InfoBar across the top, and completes the parked <see cref="DiffDecisions"/> entry when the user
-/// chooses (build-plan §5). The native diff window is a read-only *viewer* with no buttons of its
-/// own, so the InfoBar is how the user acts. All members run on the UI thread.
+/// chooses (build-plan §5). The native diff window has no buttons of its own, so the InfoBar is how
+/// the user acts. Its RIGHT pane is a live editor over the staged proposal, and Accept takes whatever
+/// that pane holds at the moment of the click - so the user can adjust Claude's change before taking it
+/// (edit-before-accept). All members run on the UI thread.
 /// </summary>
 internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
 {
@@ -30,15 +34,17 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
     private readonly string _tempPath;
     private readonly string? _ownedLeftTemp; // an empty left file we created for "new file" diffs
     private readonly bool _writeBack;         // false = review-only (hook/permission path: the CLI writes)
+    private readonly bool _editable;          // false = the caller has no way to deliver an edited version
     private readonly IVsWindowFrame _frame;
 
     private IVsInfoBarUIElement? _infoBar;
     private uint _cookie;
     private uint _frameEventsCookie;
     private bool _resolved;
+    private int? _openedAtVersion; // the right buffer's version when the diff opened (see ReadFinalContents)
 
     private DiffSession(DiffDecisions decisions, string tabName, string newPath, string contents,
-                        string tempPath, string? ownedLeftTemp, bool writeBack, IVsWindowFrame frame)
+                        string tempPath, string? ownedLeftTemp, bool writeBack, bool editable, IVsWindowFrame frame)
     {
         _decisions = decisions;
         _tabName = tabName;
@@ -47,15 +53,18 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
         _tempPath = tempPath;
         _ownedLeftTemp = ownedLeftTemp;
         _writeBack = writeBack;
+        _editable = editable;
         _frame = frame;
     }
 
     /// <summary>
     /// Open the diff window + InfoBar. Must be called on the UI thread. The decision is delivered
     /// asynchronously through <paramref name="decisions"/> when the user clicks Accept/Reject.
+    /// <paramref name="editable"/> = the caller can deliver a user-edited right pane to the CLI; when
+    /// false the pane's edits are ignored exactly as before, and the InfoBar does not advertise them.
     /// </summary>
     public static void Open(string oldPath, string newPath, string contents, string tabName,
-                            string tempPath, DiffDecisions decisions, bool writeBack = true)
+                            string tempPath, DiffDecisions decisions, bool writeBack = true, bool editable = true)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -81,7 +90,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
             caption: $"Claude Code: {fileName}",
             Tooltip: newPath,
             leftLabel: string.Format(Strings.DiffLeftLabel, fileName),
-            rightLabel: string.Format(Strings.DiffRightLabel, fileName),
+            rightLabel: string.Format(editable ? Strings.DiffRightLabelEditable : Strings.DiffRightLabel, fileName),
             inlineLabel: null,
             roles: null,
             grfDiffOptions: 0);
@@ -89,11 +98,54 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
         if (frame is null)
             throw new InvalidOperationException("OpenComparisonWindow2 returned no window frame");
 
-        var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, writeBack, frame);
+        var session = new DiffSession(decisions, tabName, newPath, contents, tempPath, ownedLeftTemp, writeBack, editable, frame);
         DiffRegistry.Register(tabName, session);
         session.AttachInfoBar();
         session.AdviseFrameEvents();
         frame.Show();
+        session._openedAtVersion = session.RightBuffer()?.CurrentSnapshot.Version.VersionNumber;
+    }
+
+    /// <summary>The editor buffer behind the diff's right-hand pane, or null if the view isn't the one we expect.</summary>
+    private ITextBuffer? RightBuffer()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (ErrorHandler.Succeeded(_frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out object view))
+                && view is IVsDifferenceCodeWindow window)
+                return window.DifferenceViewer?.DifferenceBuffer?.RightBuffer;
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"could not reach the diff's right pane: {e.Message}");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// What Accept applies: the right pane's text if the user changed it, else Claude's proposal untouched.
+    ///
+    /// "Changed" needs BOTH signals. The buffer version must have moved since the diff opened, which only
+    /// an edit does - comparing text alone is not safe, because the pane shows the staging file as VS
+    /// DECODED it, and a wrong encoding guess on a BOM-less file would make an untouched proposal look
+    /// edited and send the mojibake back as the user's "version". And the text must actually differ, so
+    /// typing a character and deleting it again is not an edit.
+    /// </summary>
+    private string ReadFinalContents(out bool userEdited)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        userEdited = false;
+        if (!_editable) return _contents;
+
+        var snapshot = RightBuffer()?.CurrentSnapshot;
+        if (snapshot == null) return _contents;
+        if (snapshot.Version.VersionNumber == (_openedAtVersion ?? 0)) return _contents;
+
+        var text = snapshot.GetText();
+        if (string.Equals(text, _contents, StringComparison.Ordinal)) return _contents;
+        userEdited = true;
+        return text;
     }
 
     /// <summary>
@@ -199,7 +251,7 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
         }
 
         var model = new InfoBarModel(
-            new[] { new InfoBarTextSpan(string.Format(Strings.DiffProposes, Path.GetFileName(_newPath))) },
+            new[] { new InfoBarTextSpan(string.Format(_editable ? Strings.DiffProposesEditable : Strings.DiffProposes, Path.GetFileName(_newPath))) },
             new[] { new InfoBarHyperlink(Accept), new InfoBarHyperlink(Reject), new InfoBarHyperlink(RejectWithReason) },
             KnownMonikers.StatusInformation,
             isCloseButtonVisible: true);
@@ -245,17 +297,23 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
         DiffRegistry.Unregister(_tabName);
         UnadviseFrameEvents(); // before CloseFrame below, which would otherwise re-enter through OnFrameDestroyed
 
+        // Read the right pane BEFORE the frame closes and takes its buffer with it.
+        bool userEdited = false;
+        string finalContents = accepted ? ReadFinalContents(out userEdited) : _contents;
+        if (userEdited)
+            Log.Info($"accepted WITH YOUR EDITS: {Path.GetFileName(_newPath)} ({_contents.Length} -> {finalContents.Length} chars)");
+
         if (accepted && _writeBack)
         {
             try
             {
                 // If the file is open in an editor, update its buffer in place and save (no reload
                 // prompt); otherwise write straight to disk.
-                if (ClaudeCodeVs.Editor.RunningDocuments.TryReplaceOpenDocument(_newPath, _contents))
+                if (ClaudeCodeVs.Editor.RunningDocuments.TryReplaceOpenDocument(_newPath, finalContents))
                     Log.Info($"openDiff: updated open editor buffer for {_newPath}");
                 else
                 {
-                    File.WriteAllText(_newPath, _contents);
+                    File.WriteAllText(_newPath, finalContents);
                     Log.Info($"openDiff: wrote {_newPath}");
                 }
             }
@@ -271,6 +329,8 @@ internal sealed class DiffSession : IVsInfoBarUIEvents, IVsWindowFrameEvents
         if (_ownedLeftTemp is not null)
             try { File.Delete(_ownedLeftTemp); } catch { /* best effort */ }
 
-        _decisions.Resolve(_tabName, new DiffDecision(accepted, accepted ? null : rejectReason));
+        _decisions.Resolve(_tabName, accepted
+            ? new DiffDecision(true, null, finalContents, userEdited)
+            : new DiffDecision(false, rejectReason));
     }
 }

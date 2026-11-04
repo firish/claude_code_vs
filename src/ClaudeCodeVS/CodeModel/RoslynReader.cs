@@ -52,7 +52,7 @@ internal static class RoslynReader
     private const int SnippetChars = 200;
 
     /// <summary>Grab the live workspace. MUST be called on the UI thread (COM service acquisition).</summary>
-    private static VisualStudioWorkspace? GetWorkspace()
+    internal static VisualStudioWorkspace? GetWorkspace()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var cm = ServiceProvider.GlobalProvider.GetService(typeof(SComponentModel)) as IComponentModel;
@@ -159,6 +159,114 @@ internal static class RoslynReader
             Log.Warn($"enclosing-function lookup failed: {e.Message}");
             return null;
         }
+    }
+
+    // ---- Test context (for the Generate Tests context action) ------------------------------------
+
+    internal sealed class TestProjectInfo
+    {
+        public string Name = "";
+        public string Framework = "";      // xUnit | NUnit | MSTest | TUnit
+        public string? Path;
+        public bool ReferencesTarget;      // already references the project under test
+    }
+
+    internal sealed class TestContext
+    {
+        public string? TargetProject;
+        public readonly List<TestProjectInfo> TestProjects = new();
+        public readonly List<string> ExistingTests = new(); // FQNs of test methods that already call the target
+    }
+
+    /// <summary>
+    /// What "Generate Tests" needs to compose a good instruction: which projects in the solution are test
+    /// projects (and on which framework), whether they already reference the project under test, and which
+    /// existing tests already exercise the member at the caret (so Claude extends rather than duplicates).
+    /// Framework detection reads the compiler's reference list, not package files, so it works for
+    /// packages.config and SDK projects alike. Bounded: a huge solution's caller search is cut off rather
+    /// than making a right-click wait.
+    /// </summary>
+    public static async Task<TestContext> GetTestContextAsync(string filePath, int line, int column, CancellationToken ct)
+    {
+        var result = new TestContext();
+        try
+        {
+            var solution = await GetSolutionOffThreadAsync(ct);
+            if (solution == null || !solution.Projects.Any()) return result;
+
+            var doc = FindDocument(solution, filePath);
+            var target = doc?.Project;
+            result.TargetProject = target?.Name;
+            string? targetPath = target?.FilePath;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var project in solution.Projects)
+            {
+                var framework = TestFrameworkOf(project);
+                if (framework == null) continue;
+                var key = project.FilePath ?? project.Name;
+                if (!seen.Add(key)) continue; // one entry per project, not per target framework
+                result.TestProjects.Add(new TestProjectInfo
+                {
+                    Name = Regex.Replace(project.Name, @"\s*\([^)]+\)\s*$", ""),
+                    Framework = framework,
+                    Path = project.FilePath,
+                    ReferencesTarget = targetPath != null && project.ProjectReferences.Any(r =>
+                        string.Equals(solution.GetProject(r.ProjectId)?.FilePath, targetPath, StringComparison.OrdinalIgnoreCase)),
+                });
+            }
+
+            if (doc == null) return result;
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bounded.CancelAfter(TimeSpan.FromSeconds(4));
+            try
+            {
+                var text = await doc.GetTextAsync(bounded.Token);
+                if (line < 0 || line >= text.Lines.Count) return result;
+                var tl = text.Lines[line];
+                int position = Math.Min(tl.Start + Math.Max(0, column), tl.End);
+                var model = await doc.GetSemanticModelAsync(bounded.Token);
+                ISymbol? symbol = null;
+                for (var s = model?.GetEnclosingSymbol(position, bounded.Token); s != null; s = s.ContainingSymbol)
+                    if (s is IMethodSymbol or IPropertySymbol) { symbol = s; break; }
+                if (symbol is IMethodSymbol { AssociatedSymbol: IPropertySymbol prop }) symbol = prop;
+                if (symbol == null) return result;
+
+                var callers = await SymbolFinder.FindCallersAsync(symbol, solution, bounded.Token).ConfigureAwait(false);
+                foreach (var c in callers)
+                {
+                    if (c.CallingSymbol is not IMethodSymbol m) continue;
+                    if (!m.GetAttributes().Any(a => a.AttributeClass != null && TestAttributeNames.Contains(a.AttributeClass.Name))) continue;
+                    var fqn = m.ContainingType.ToDisplayString() + "." + m.Name;
+                    if (!result.ExistingTests.Contains(fqn)) result.ExistingTests.Add(fqn);
+                    if (result.ExistingTests.Count >= 10) break;
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                Log.Event("test context: caller search timed out (4s) - proceeding without existing-test hints");
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"test context lookup failed: {e.Message}");
+        }
+        return result;
+    }
+
+    /// <summary>The test framework a project compiles against, by its reference assemblies; null if none.</summary>
+    private static string? TestFrameworkOf(Project project)
+    {
+        foreach (var r in project.MetadataReferences)
+        {
+            var name = System.IO.Path.GetFileName((r as PortableExecutableReference)?.FilePath ?? r.Display ?? "");
+            if (name.Length == 0) continue;
+            if (name.Equals("xunit.core.dll", StringComparison.OrdinalIgnoreCase) || name.Equals("xunit.v3.core.dll", StringComparison.OrdinalIgnoreCase)) return "xUnit";
+            if (name.Equals("nunit.framework.dll", StringComparison.OrdinalIgnoreCase)) return "NUnit";
+            if (name.Equals("Microsoft.VisualStudio.TestPlatform.TestFramework.dll", StringComparison.OrdinalIgnoreCase)) return "MSTest";
+            if (name.Equals("TUnit.Core.dll", StringComparison.OrdinalIgnoreCase)) return "TUnit";
+        }
+        return null;
     }
 
     /// <summary>

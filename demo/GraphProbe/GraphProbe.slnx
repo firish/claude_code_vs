@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="GraphProbe.Core/GraphProbe.Core.csproj" />
+  <Project Path="GraphProbe.App/GraphProbe.App.csproj" />
+</Solution>

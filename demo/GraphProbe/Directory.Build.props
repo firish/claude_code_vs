@@ -1,0 +1,11 @@
+<Project>
+  <!-- Everything here applies to BOTH projects, and neither project file mentions any of it. That is
+       the point of the fixture: read GraphProbe.App.csproj as text and you would conclude the language
+       version is the SDK default, nullable is off and warnings are warnings. All three are wrong. -->
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

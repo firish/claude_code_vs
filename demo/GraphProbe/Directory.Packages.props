@@ -1,0 +1,12 @@
+<Project>
+  <!-- Central Package Management: the project files carry <PackageReference Include="..." /> with NO
+       Version attribute. The versions live here, one folder up, where a per-project read never looks. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageVersion Include="System.Memory" Version="4.5.5" />
+  </ItemGroup>
+</Project>

@@ -79,6 +79,77 @@ internal sealed class VsGetSelectionTool : IIdeTool
     }
 }
 
+/// <summary>
+/// vs_solution_model - the evaluated project graph: real target frameworks, resolved package versions
+/// (transitive included), project references, the active configuration, the analyzer set and evaluated
+/// MSBuild properties. The answer to "what does this project actually build with", which reading the
+/// .csproj cannot give once Directory.Build.props or Central Package Management is in play.
+/// </summary>
+internal sealed class VsSolutionModelTool : IIdeTool
+{
+    public string Name => "vs_solution_model";
+    public string Description =>
+        "Get Visual Studio's EVALUATED model of the open solution - what MSBuild and NuGet actually resolved, "
+        + "not what the project files say. Per project: real target frameworks, project references, NuGet "
+        + "packages with their RESOLVED versions, the active configuration/platform, and the analyzer count. "
+        + "Use this instead of reading .csproj files: values inherited from Directory.Build.props / "
+        + "Directory.Build.targets, versions supplied by Central Package Management (Directory.Packages.props) "
+        + "and every transitive package are invisible in the project file. Omit 'project' for the whole-solution "
+        + "overview. Pass project = a project name or the path of any file in it for full detail: the transitive "
+        + "package closure with what pulled each one in, the analyzer set grouped by origin, and the evaluated "
+        + "MSBuild properties (LangVersion, Nullable, TreatWarningsAsErrors, NoWarn, ...). 'properties' evaluates "
+        + "any other MSBuild property by name. Package data comes from the last NuGet restore; C++ and other "
+        + "non-Roslyn projects report configuration and properties only.";
+
+    public JToken Schema => new JObject
+    {
+        ["type"] = "object",
+        ["properties"] = new JObject
+        {
+            ["project"] = new JObject
+            {
+                ["type"] = "string",
+                ["description"] = "Read one project in full. Accepts a project name (or a substring of one) or "
+                                + "the path of any file inside it. Omit for the solution overview.",
+            },
+            ["properties"] = new JObject
+            {
+                ["type"] = "array",
+                ["items"] = new JObject { ["type"] = "string" },
+                ["description"] = "Extra MSBuild property names to evaluate, e.g. [\"WarningLevel\", \"DefineConstants\"]. "
+                                + $"Up to {SolutionModelReader.MaxExtraPropertiesProject} with 'project', "
+                                + $"{SolutionModelReader.MaxExtraPropertiesSolution} across the whole solution.",
+            },
+        },
+    };
+
+    public async Task<object> InvokeAsync(JToken args, CancellationToken ct)
+    {
+        var project = (string?)args?["project"];
+        var props = new System.Collections.Generic.List<string>();
+        if (args?["properties"] is JArray requested)
+            foreach (var p in requested)
+                if ((string?)p is { Length: > 0 } name) props.Add(name);
+
+        JObject result;
+        try
+        {
+            result = await SolutionModelReader.ReadAsync(project, props, ct);
+        }
+        catch (System.Exception e)
+        {
+            Log.Warn($"vs_solution_model failed: {e.Message}");
+            return new JObject { ["available"] = true, ["error"] = e.Message };
+        }
+
+        Log.Info($"vs_solution_model(project={project ?? "*"}) -> "
+               + ((bool?)result["available"] == false ? "unavailable"
+                  : result["error"] != null ? $"error: {(string?)result["error"]}"
+                  : $"{(int?)result["projectCount"] ?? 0} project(s)"));
+        return result;
+    }
+}
+
 /// <summary>vs_decompile — a framework/NuGet symbol with no source → decompiled C# (the Go-To-Definition path).</summary>
 internal sealed class VsDecompileTool : IIdeTool
 {

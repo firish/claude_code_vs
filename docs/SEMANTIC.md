@@ -12,7 +12,7 @@ It is the third axis of what an IDE knows, alongside the two the extension alrea
 
 The `claude` CLI does the agent work. The extension exposes Roslyn to it over the same localhost bridge that powers the diff, diagnostics, and debugger features.
 
-**Jump to:** [Watch it work](#watch-it-work) · [Why it beats grep](#why-this-beats-grep) · [Read a library body (`vs_decompile`)](#reading-library-bodies-vs_decompile) · [Workflows it unlocks](#two-workflows-it-unlocks) · [Tool catalog](#tool-catalog)
+**Jump to:** [Watch it work](#watch-it-work) · [Why it beats grep](#why-this-beats-grep) · [Read a library body (`vs_decompile`)](#reading-library-bodies-vs_decompile) · [The evaluated project graph (`vs_solution_model`)](#the-evaluated-project-graph-vs_solution_model) · [Workflows it unlocks](#two-workflows-it-unlocks) · [Tool catalog](#tool-catalog)
 
 **Reference:** [How it reaches the model](#how-it-reaches-the-model-a-third-mcp-server) · [Limitations](#limitations) · [Fixtures to try](#fixtures-to-try)
 
@@ -66,6 +66,23 @@ The core BCL wrinkle is handled. Core BCL types (`String`, `Int32`, and so on) a
 
 ---
 
+## The evaluated project graph: `vs_solution_model`
+
+Claude reads `.csproj` files as text, and in a modern repo the text is wrong in three ways it cannot see. A `Directory.Build.props` two folders up sets `LangVersion`, `Nullable` and `TreatWarningsAsErrors` for every project, and no project file mentions them. Central Package Management moves every version out of the project into `Directory.Packages.props`, so `<PackageReference Include="Newtonsoft.Json" />` says nothing about which version is in use. And the packages a project actually compiles against include the whole transitive closure, which is written nowhere except NuGet's restore output.
+
+`vs_solution_model` returns what MSBuild and NuGet actually resolved, per project:
+
+- **Target frameworks** as restored, including multi-targeting.
+- **Packages with their resolved versions**, direct ones split from transitive, each direct entry flagged when its version came from Central Package Management (`centrallyManaged`) or was added by the SDK without being written anywhere (`implicit`). A `requested` field appears only when resolution moved the version - a floating range, or a transitive dependency forcing a higher one than the project asked for.
+- **Project references**, the active **configuration and platform** per project (which can differ from the solution's - a "Release" solution routinely builds one project as Debug, or skips it), the **startup projects**, and which `Directory.Build.props` / `.targets` a project inherits from.
+- With `project` (a name, a substring, or the path of any file in it): the **transitive closure with `requestedBy`** naming what pulled each package in, the **analyzer set** grouped by origin (a package, a targeting pack, the SDK), and the **evaluated MSBuild properties** that most often diverge from the project text - `LangVersion`, `Nullable`, `TreatWarningsAsErrors`, `WarningsAsErrors`, `NoWarn`, `AnalysisLevel`, `EnforceCodeStyleInBuild`, output paths, runtime identifiers. `properties` evaluates any other property by name.
+
+Three sources, stitched by project file path. EnvDTE and `IVsBuildPropertyStorage` supply the project list, the active configuration and the evaluated properties (an evaluated value has every import already applied, which is the whole Directory.Build.props answer); the Roslyn workspace the other tools already hold supplies the language, the effective language version, project references and analyzers; and `obj/project.assets.json`, NuGet's own resolved graph from the last restore, supplies the packages. It is located through the evaluated `ProjectAssetsFile` property, so a repo that redirects `obj/` is still found, and a project without one (packages.config, or never restored) falls back to the compiler's reference list with a note saying so.
+
+Try it on [`demo/GraphProbe`](../demo/GraphProbe): two projects whose files say nothing about the language version, nullability, warnings-as-errors or any package version, because all of it lives in the `Directory.Build.props` and `Directory.Packages.props` beside them. `GraphProbe.Core` multi-targets `net10.0` and `netstandard2.0` with a package only one of them needs, so the two frameworks resolve different sets; `GraphProbe.App` references it and pulls Serilog in transitively through a sink package it never names.
+
+---
+
 ## Two workflows it unlocks
 
 The tools compose. `vs_search_symbols` (or `vs_get_selection`) yields a `symbolId`, and everything else consumes one. Two end-to-end examples of how that changes what the agent can do.
@@ -114,7 +131,7 @@ There are now two such servers, both backed by the same stdio shim (`vs-mcp-shim
 
 ## Tool catalog
 
-All tools live on the `vs-semantic` MCP server and appear to the model as `mcp__vs-semantic__*`. They are read-only and ungated (no execution, no mutation), managed (C#/VB) only, and each returns `{"available":false}` when no project is loaded.
+All tools live on the `vs-semantic` MCP server and appear to the model as `mcp__vs-semantic__*`. They are read-only and ungated (no execution, no mutation), managed (C#/VB) only apart from `vs_solution_model`, and each returns `{"available":false}` when no project is loaded.
 
 ### Addressing: how you name a symbol
 
@@ -135,8 +152,9 @@ The intended workflow is search, take the `symbolId`, then navigate.
 | `vs_call_hierarchy` | `direction:"callers"` (default): who transitively calls a method, as a depth-limited, cycle-guarded tree with call sites, for impact analysis. `direction:"callees"`: what the method directly calls (depth 1). |
 | `vs_type_hierarchy` | `direction:"derived"` (default): subtypes and implementors. `direction:"base"`: the base-class chain and implemented interfaces. |
 | `vs_decompile` | A framework or NuGet symbol with no source (a method or type in a referenced DLL), returned as decompiled C#. The one thing reading the repo cannot give you. See [above](#reading-library-bodies-vs_decompile). |
+| `vs_solution_model` | The evaluated project graph: target frameworks, resolved package versions (transitive with `project`), project references, active configuration/platform, analyzers, and evaluated MSBuild properties. Takes no symbol; `project` narrows to one project in full, `properties` evaluates extra property names. Works for any project the solution loads (C++ projects report configuration and properties only). See [above](#the-evaluated-project-graph-vs_solution_model). |
 
-Output is bounded but signaled. Large results are capped (references 200, implementations and hierarchy 120, search 80, caller depth 3) and carry `{"truncated":true,"note":"..."}` so the model knows to narrow its query.
+Output is bounded but signaled. Large results are capped (references 200, implementations and hierarchy 120, search 80, caller depth 3; solution model 150 projects, 80 direct and 300 transitive packages per project) and carry `{"truncated":true,"note":"..."}` so the model knows to narrow its query.
 
 ---
 
@@ -154,6 +172,8 @@ Output is bounded but signaled. Large results are capped (references 200, implem
 ## Fixtures to try
 
 Open [`demo/RefMaze/RefMaze.sln`](../demo/RefMaze) in Visual Studio 2026, Launch Claude Code, and ask Claude to map the `IShape` hierarchy, find every implementor, or trace who calls `Area()`. Then compare against `grep IShape` and `grep Area`. The maze's own comments name what each tool should prove.
+
+For `vs_solution_model`, open [`demo/GraphProbe/GraphProbe.slnx`](../demo/GraphProbe) and ask which language version `GraphProbe.App` compiles with, which version of Newtonsoft.Json it uses and why, or whether warnings are errors. Every answer is absent from the project file Claude would otherwise read.
 
 ---
 

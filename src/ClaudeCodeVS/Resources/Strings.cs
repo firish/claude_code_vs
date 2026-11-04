@@ -78,6 +78,13 @@ internal static class Strings
     internal static string EditsTooltipFormat => S(nameof(EditsTooltipFormat));
     internal static string EditsTooltipRewritten => S(nameof(EditsTooltipRewritten));
 
+    // ---- Panel: the live-activity card (1.22.0) ----
+    internal static string ActivityWorking => S(nameof(ActivityWorking));
+    internal static string ActivityFinished => S(nameof(ActivityFinished));
+    internal static string ActivityToolCalls => S(nameof(ActivityToolCalls));
+    internal static string ActivityThinking => S(nameof(ActivityThinking));
+    internal static string ActivityTasksFormat => S(nameof(ActivityTasksFormat));
+
     // ---- Panel: warning banners ----
     internal static string BannerHooksOnlyTitle => S(nameof(BannerHooksOnlyTitle));
     internal static string BannerHooksOnlyText => S(nameof(BannerHooksOnlyText));
@@ -118,6 +125,9 @@ internal static class Strings
     internal static string DiffProposes => S(nameof(DiffProposes));
     internal static string DiffLeftLabel => S(nameof(DiffLeftLabel));
     internal static string DiffRightLabel => S(nameof(DiffRightLabel));
+    // Edit-before-accept variants: shown when the bridge can deliver an edited right pane to the CLI.
+    internal static string DiffProposesEditable => S(nameof(DiffProposesEditable));
+    internal static string DiffRightLabelEditable => S(nameof(DiffRightLabelEditable));
 
     // ---- Notifications ----
     internal static string MarqueeNoticeText => S(nameof(MarqueeNoticeText));

@@ -68,24 +68,32 @@ public sealed class ClaudeCodeVsPackage : AsyncPackage
             mcs.AddCommand(new MenuCommand(OnAddItemsToChat,
                 new CommandID(PackageGuids.CommandSet, PackageIds.AddItemsToChat)));
 
-            // Fix This Test hides outside test-looking files. The visibility check must be instant
-            // (it runs on every right-click), so it's a filename heuristic - "test" in the name -
-            // not a Roslyn query; the real is-this-a-test resolution happens at click time.
+            // Fix This Test hides outside test-looking files; Generate Tests hides INSIDE them (a test
+            // file is not what you generate tests for). The visibility check must be instant (it runs
+            // on every right-click), so it's a filename heuristic - "test" in the name - not a Roslyn
+            // query; the real resolution happens at click time.
             var fixTest = new OleMenuCommand(OnFixTest,
                 new CommandID(PackageGuids.CommandSet, PackageIds.FixTest));
-            fixTest.BeforeQueryStatus += (s, _) =>
-            {
-                if (s is not OleMenuCommand cmd) return;
-                var file = Editor.SelectionService.Current.FilePath;
-                cmd.Visible = file != null
-                    && System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("test", StringComparison.OrdinalIgnoreCase) >= 0;
-            };
+            fixTest.BeforeQueryStatus += (s, _) => { if (s is OleMenuCommand cmd) cmd.Visible = ActiveFileLooksLikeTest(); };
             mcs.AddCommand(fixTest);
+
+            var generateTests = new OleMenuCommand(OnGenerateTests,
+                new CommandID(PackageGuids.CommandSet, PackageIds.GenerateTests));
+            generateTests.BeforeQueryStatus += (s, _) => { if (s is OleMenuCommand cmd) cmd.Visible = !ActiveFileLooksLikeTest(); };
+            mcs.AddCommand(generateTests);
         }
 
         // Once-per-marquee-release "what's new" InfoBar. No-op on routine releases
         // (UpdateNotice.MarqueeVersion is null) and after the user has seen an armed one.
         JoinableTaskFactory.RunAsync(Ui.UpdateNotice.ShowOnceAsync).FileAndForget("claudecodevs/updateNotice");
+    }
+
+    /// <summary>"test" anywhere in the active file's name - the menu-open heuristic shared by the two test entries.</summary>
+    private static bool ActiveFileLooksLikeTest()
+    {
+        var file = Editor.SelectionService.Current.FilePath;
+        return file != null
+            && System.IO.Path.GetFileNameWithoutExtension(file).IndexOf("test", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     /// <summary>
@@ -162,6 +170,9 @@ public sealed class ClaudeCodeVsPackage : AsyncPackage
     private void OnFixTest(object sender, EventArgs e)
         => JoinableTaskFactory.RunAsync(Editor.ContextActions.FixTestAsync).FileAndForget("claudecodevs/fixTest");
 
+    private void OnGenerateTests(object sender, EventArgs e)
+        => JoinableTaskFactory.RunAsync(Editor.ContextActions.GenerateTestsAsync).FileAndForget("claudecodevs/generateTests");
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -189,4 +200,5 @@ internal static class PackageIds
     public const int AddComments = 0x0106;
     public const int FixTest = 0x0107;
     public const int AddItemsToChat = 0x0108;
+    public const int GenerateTests = 0x0109;
 }

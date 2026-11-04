@@ -105,6 +105,13 @@ public sealed class McpServer
         try
         {
             object result = await tool.InvokeAsync(args, ct);
+            if (result is TextBlocks multi)
+            {
+                var content = new JArray();
+                foreach (var block in multi.Blocks)
+                    content.Add(new JObject { ["type"] = "text", ["text"] = block });
+                return new JObject { ["content"] = content };
+            }
             // Wire format: plain string -> verbatim; JToken/anything else -> serialized compact.
             string text = result switch
             {

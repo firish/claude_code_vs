@@ -278,7 +278,7 @@ internal static class SolutionBuilder
     // ---------------- project resolution ----------------
 
     /// <summary>Match a project by unique name, name, or a file path inside it. UI thread.</summary>
-    private static (string? uniqueName, string? name) ResolveProject(Solution solution, string arg)
+    internal static (string? uniqueName, string? name) ResolveProject(Solution solution, string arg)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -329,7 +329,7 @@ internal static class SolutionBuilder
     }
 
     /// <summary>Flatten the solution tree, descending through solution folders. UI thread.</summary>
-    private static IEnumerable<Project> AllProjects(Solution solution)
+    internal static IEnumerable<Project> AllProjects(Solution solution)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 

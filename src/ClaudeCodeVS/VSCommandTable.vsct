@@ -112,6 +112,18 @@
           <ButtonText>Add Comments</ButtonText>
         </Strings>
       </Button>
+      <!-- Generate Tests and Fix This Test are complements: the first is for the code under test, the
+           second for a test itself, so each hides where the other shows (the same filename heuristic
+           in BeforeQueryStatus, inverted). Both need DynamicVisibility for that. -->
+      <Button guid="guidClaudeCmdSet" id="GenerateTestsId" priority="0x0125" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="ClaudeCtxEditGroup" />
+        <Icon guid="ImageCatalogGuid" id="AddTest" />
+        <CommandFlag>IconIsMoniker</CommandFlag>
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>Generate Tests</ButtonText>
+        </Strings>
+      </Button>
       <!-- Hidden outside test-looking files: BeforeQueryStatus (a filename heuristic - Roslyn is too
            slow for menu-open) flips Visible, which needs DynamicVisibility. -->
       <Button guid="guidClaudeCmdSet" id="FixTestId" priority="0x0130" type="Button">
@@ -173,6 +185,7 @@
       <IDSymbol name="AddCommentsId" value="0x0106" />
       <IDSymbol name="FixTestId" value="0x0107" />
       <IDSymbol name="AddItemsToChatId" value="0x0108" />
+      <IDSymbol name="GenerateTestsId" value="0x0109" />
     </GuidSymbol>
     <!-- GUID_TextEditorFactory: scopes the Alt+K binding to the text editor. -->
     <GuidSymbol name="guidTextEditor" value="{8B382828-6202-11D1-8870-0000F87579D2}" />

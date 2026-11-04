@@ -62,6 +62,13 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly Border _editsCard;
     private readonly TextBlock _editsHeader;
     private readonly ItemsControl _editsList;
+    private readonly Border _activityCard;
+    private readonly Ellipse _activityDot;
+    private readonly TextBlock _activityHeader;
+    private readonly TextBlock _activityPrompt;
+    private readonly StackPanel _activityTools;
+    private readonly TextBlock _activityTasksLabel;
+    private readonly StackPanel _activityTasks;
     private readonly StackPanel _costRow;
     private readonly TextBlock _costText;
     private readonly Button _costButton;
@@ -75,7 +82,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         FontScale.BindRoot(this);
 
         var root = new Grid { Margin = new Thickness(10, 8, 10, 8) };
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 9; i++)
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // feed
 
@@ -233,7 +240,37 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         Grid.SetRow(statsCard, 3);
 
-        // ---- Row 4: pending diffs (collapsed when none) ----
+        // ---- Row 4: live activity (collapsed until the first turn) ----
+        // What Claude is doing right now: turn state + elapsed, the tool call in flight, its task list.
+        // Fed by the transcript tail (Activity/TranscriptTail), not by a hook per tool call. This is
+        // most of what a chat pane earns its space with DURING a turn, without building one.
+        var activityHead = new StackPanel { Orientation = Orientation.Horizontal };
+        _activityDot = new Ellipse { Width = 8, Height = 8, Fill = DotIdle, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(1, 0, 6, 0) };
+        _activityHeader = Font(new TextBlock { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center }, 1.0);
+        activityHead.Children.Add(_activityDot);
+        activityHead.Children.Add(_activityHeader);
+        _activityPrompt = Font(new TextBlock { Opacity = 0.6, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(15, 1, 0, 0) }, 0.92);
+        _activityTools = new StackPanel { Margin = new Thickness(15, 3, 0, 0) };
+        _activityTasksLabel = Font(new TextBlock { Opacity = 0.55, FontWeight = FontWeights.SemiBold, Margin = new Thickness(15, 6, 0, 2) }, 0.83);
+        _activityTasks = new StackPanel { Margin = new Thickness(15, 0, 0, 0) };
+        var activityStack = new StackPanel();
+        activityStack.Children.Add(activityHead);
+        activityStack.Children.Add(_activityPrompt);
+        activityStack.Children.Add(_activityTools);
+        activityStack.Children.Add(_activityTasksLabel);
+        activityStack.Children.Add(_activityTasks);
+        _activityCard = new Border
+        {
+            Background = Chip,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 7, 10, 7),
+            Margin = new Thickness(0, 0, 0, 8),
+            Visibility = Visibility.Collapsed,
+            Child = activityStack,
+        };
+        Grid.SetRow(_activityCard, 4);
+
+        // ---- Row 5: pending diffs (collapsed when none) ----
         _pendingText = Font(new TextBlock { TextWrapping = TextWrapping.Wrap }, 1.0);
         _pendingCard = new Border
         {
@@ -244,9 +281,9 @@ internal sealed class ClaudeToolWindowControl : UserControl
             Visibility = Visibility.Collapsed,
             Child = _pendingText,
         };
-        Grid.SetRow(_pendingCard, 4);
+        Grid.SetRow(_pendingCard, 5);
 
-        // ---- Row 5: edits this turn (collapsed when none) ----
+        // ---- Row 6: edits this turn (collapsed when none) ----
         // Issue #44: the CLI prints "changed Foo.cs:1234" in the terminal and VS's terminal has no link
         // provider we can hook, so the jump targets live here instead. Scoped to the current turn (the
         // UserPromptSubmit hook marks the list stale, the next edit replaces it) so it stays a handful of
@@ -262,9 +299,9 @@ internal sealed class ClaudeToolWindowControl : UserControl
         editsStack.Children.Add(_editsHeader);
         editsStack.Children.Add(_editsList);
         _editsCard = new Border { Visibility = Visibility.Collapsed, Child = editsStack };
-        Grid.SetRow(_editsCard, 5);
+        Grid.SetRow(_editsCard, 6);
 
-        // ---- Row 6: attachments (drop/paste target + staged chips) ----
+        // ---- Row 7: attachments (drop/paste target + staged chips) ----
         // Screenshots can't be pasted into the CLI on Windows (open upstream gap), so the panel is the
         // paste/drop point: stage the file, then push an at_mentioned so the reference lands in the
         // CLI's composer with no path typing. Chips show what's staged; × removes, click re-mentions.
@@ -318,16 +355,16 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         attachCard.DragOver += OnAttachDragOver;
         attachCard.Drop += OnAttachDrop;
-        Grid.SetRow(attachCard, 6);
+        Grid.SetRow(attachCard, 7);
 
         // Ctrl+V anywhere in the panel = the Paste image button.
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, (s, e) => PasteFromClipboard()));
 
-        // ---- Row 6: feed label ----
+        // ---- Row 8: feed label ----
         var feedLabel = Font(new TextBlock { Text = Strings.FeedLabel, FontWeight = FontWeights.SemiBold, Opacity = 0.55, Margin = new Thickness(2, 0, 0, 4) }, 0.83);
-        Grid.SetRow(feedLabel, 7);
+        Grid.SetRow(feedLabel, 8);
 
-        // ---- Row 7: curated activity feed ----
+        // ---- Row 9: curated activity feed ----
         _feed = new ListBox
         {
             BorderThickness = new Thickness(1),
@@ -337,12 +374,13 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         ScrollViewer.SetHorizontalScrollBarVisibility(_feed, ScrollBarVisibility.Auto);
         _feed.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
-        Grid.SetRow(_feed, 8);
+        Grid.SetRow(_feed, 9);
 
         root.Children.Add(header);
         root.Children.Add(toolbarStack);
         root.Children.Add(_toolsWarningCard);
         root.Children.Add(statsCard);
+        root.Children.Add(_activityCard);
         root.Children.Add(_pendingCard);
         root.Children.Add(_editsCard);
         root.Children.Add(attachCard);
@@ -370,6 +408,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         _wired = true;
         BridgeStatus.Logged += OnLogged;
         BridgeStatus.Changed += OnChanged;
+        Activity.AgentActivity.Changed += OnChanged;
         Attachments.AttachmentService.Changed += OnAttachmentsChanged;
         // Re-sync from current state (we may have missed events while hidden).
         _feed.Items.Clear();
@@ -386,6 +425,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         _wired = false;
         BridgeStatus.Logged -= OnLogged;
         BridgeStatus.Changed -= OnChanged;
+        Activity.AgentActivity.Changed -= OnChanged;
         Attachments.AttachmentService.Changed -= OnAttachmentsChanged;
         _timer.Stop();
     }
@@ -519,6 +559,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         }
 
         RefreshEdits();
+        RefreshActivity();
 
         // The two-variant warning banner. Variant 1 ("hooks only"): a session's hook POSTs are reaching
         // the bridge but the IDE WebSocket never connected - claude was launched outside the extension,
@@ -730,6 +771,118 @@ internal sealed class ClaudeToolWindowControl : UserControl
 
             _editsList.Items.Add(row);
         }
+    }
+
+    /// <summary>
+    /// Render the live-activity card: turn state with elapsed time (the 1s timer keeps it moving), the
+    /// tool call(s) in flight or the last one done, and Claude's task list when the session has one.
+    /// Hidden until the first turn so it costs no height before there is anything to say.
+    /// </summary>
+    private void RefreshActivity()
+    {
+        if (!Activity.AgentActivity.HasActivity)
+        {
+            _activityCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _activityCard.Visibility = Visibility.Visible;
+
+        bool active = Activity.AgentActivity.TurnActive;
+        var started = Activity.AgentActivity.TurnStartedAt;
+        var ended = Activity.AgentActivity.TurnEndedAt;
+        int calls = Activity.AgentActivity.ToolCallsThisTurn;
+
+        _activityDot.Fill = active ? DotConnected : DotIdle;
+        if (active)
+        {
+            _activityHeader.Text = Strings.ActivityWorking + (started is DateTime s ? "  ·  " + Uptime(s) : "");
+        }
+        else
+        {
+            string took = started is DateTime s2 && ended is DateTime e2 ? "  ·  " + Duration(e2 - s2) : "";
+            _activityHeader.Text = Strings.ActivityFinished + took + "  ·  " + string.Format(Strings.ActivityToolCalls, calls);
+        }
+
+        var prompt = Activity.AgentActivity.PromptPreview;
+        _activityPrompt.Visibility = string.IsNullOrEmpty(prompt) ? Visibility.Collapsed : Visibility.Visible;
+        _activityPrompt.Text = prompt ?? "";
+
+        // Tool lines: only meaningful mid-turn. Tool names, paths and commands are not localized.
+        _activityTools.Children.Clear();
+        if (active)
+        {
+            var tools = Activity.AgentActivity.ActiveTools;
+            if (tools.Count > 0)
+            {
+                foreach (var t in tools)
+                {
+                    var running = DateTime.Now - t.StartedAt;
+                    var age = running.TotalSeconds >= 5 ? $"   {Duration(running)}" : "";
+                    _activityTools.Children.Add(ToolLine("⚙ " + t.Name, t.Summary + age, 1.0));
+                }
+            }
+            else
+            {
+                var last = Activity.AgentActivity.LastCompleted;
+                _activityTools.Children.Add(ToolLine(Strings.ActivityThinking,
+                    last != null ? $"  ({last.Name} {last.Summary})" : "", 0.7));
+            }
+            _activityTools.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            _activityTools.Visibility = Visibility.Collapsed;
+        }
+
+        // Task list (TaskCreate/TaskUpdate, or TodoWrite on older CLIs). Newer models don't get these
+        // tools by default, so this block is simply absent for most sessions - not a bug.
+        var tasks = Activity.AgentActivity.Tasks;
+        _activityTasks.Children.Clear();
+        if (tasks.Count == 0)
+        {
+            _activityTasksLabel.Visibility = Visibility.Collapsed;
+            _activityTasks.Visibility = Visibility.Collapsed;
+            return;
+        }
+        int done = 0;
+        foreach (var t in tasks) if (t.Status == "completed") done++;
+        _activityTasksLabel.Text = string.Format(Strings.ActivityTasksFormat, done, tasks.Count);
+        _activityTasksLabel.Visibility = Visibility.Visible;
+        _activityTasks.Visibility = Visibility.Visible;
+        foreach (var t in tasks)
+        {
+            string glyph = t.Status switch { "completed" => "☑", "in_progress" => "◐", _ => "☐" };
+            string text = t.Status == "in_progress" && !string.IsNullOrEmpty(t.ActiveForm) ? t.ActiveForm! : t.Subject;
+            var row = Font(new TextBlock
+            {
+                Text = glyph + "  " + text,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Opacity = t.Status == "completed" ? 0.5 : (t.Status == "in_progress" ? 1.0 : 0.8),
+                Margin = new Thickness(0, 0, 0, 1),
+            }, 0.96);
+            row.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            _activityTasks.Children.Add(row);
+        }
+    }
+
+    private TextBlock ToolLine(string head, string detail, double opacity)
+    {
+        var tb = Font(new TextBlock
+        {
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Opacity = opacity,
+        }, 0.96);
+        tb.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        tb.Inlines.Add(new System.Windows.Documents.Run(head) { FontWeight = FontWeights.SemiBold });
+        if (detail.Length > 0) tb.Inlines.Add(new System.Windows.Documents.Run("  " + detail) { FontFamily = Mono });
+        return tb;
+    }
+
+    private static string Duration(TimeSpan t)
+    {
+        if (t.TotalHours >= 1) return $"{(int)t.TotalHours}h {t.Minutes}m";
+        if (t.TotalMinutes >= 1) return $"{t.Minutes}m {t.Seconds}s";
+        return $"{Math.Max(0, t.Seconds)}s";
     }
 
     private void RefreshAttachments()

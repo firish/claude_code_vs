@@ -68,8 +68,9 @@ internal sealed class OpenDiffTool : IIdeTool
                 // writeBack:false (issue #17 double-write): in the terminal model the CLI applies the
                 // edit ITSELF after approval - live-verified on 2.1.221, where our Accept write-back
                 // PLUS the CLI's own apply doubled append-style edits (the terminal prompt is a second
-                // gate openDiff acceptance doesn't dismiss). DIFF_ACCEPTED closes the review; the CLI
-                // is the sole writer - same contract as the hook/permission path.
+                // gate the old DIFF_ACCEPTED reply didn't dismiss). The accept reply (FILE_SAVED + the
+                // final contents, see below) closes the review; the CLI is the sole writer - same
+                // contract as the hook/permission path.
                 DiffSession.Open(oldPath, newPath, contents, tabName, temp, _decisions, writeBack: false);
             }
             catch (Exception e)
@@ -81,9 +82,17 @@ internal sealed class OpenDiffTool : IIdeTool
         }).FileAndForget("claudecodevs/openDiff");
 #pragma warning restore VSSDK007
 
-        bool ok = (await decision).Accepted; // BLOCKS until the user decides
-        Log.Info($"openDiff: {(ok ? "ACCEPTED" : "REJECTED")} '{tabName}'");
+        var d = await decision; // BLOCKS until the user decides
+        Log.Info($"openDiff: {(d.Accepted ? (d.UserEdited ? "ACCEPTED (edited)" : "ACCEPTED") : "REJECTED")} '{tabName}'");
 
-        return ok ? "DIFF_ACCEPTED" : "DIFF_REJECTED";
+        // The CLI (checked against 2.1.263) recognizes exactly three replies: FILE_SAVED followed by a
+        // second text block holding the file's final contents (which it then applies), TAB_CLOSED
+        // (apply the original proposal), and DIFF_REJECTED. Anything else - including the DIFF_ACCEPTED
+        // this returned through 1.21 - lands in its "Not accepted" branch, which is why the terminal's
+        // own permission prompt used to stay up after an Accept here. FILE_SAVED also carries the
+        // user's edits when they changed the right pane before accepting.
+        return d.Accepted
+            ? new TextBlocks("FILE_SAVED", d.FinalContents ?? contents)
+            : "DIFF_REJECTED";
     }
 }

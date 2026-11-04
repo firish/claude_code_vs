@@ -22,6 +22,7 @@ Current release ships the core protocol bridge end-to-end: native diff with Acce
 
 **Shipped (1.9.0):** `vs_search_symbols` / `vs_find_references` / `vs_go_to_definition` / `vs_find_implementations` / `vs_call_hierarchy` / `vs_type_hierarchy` on the `vs-semantic` MCP server (`docs/SEMANTIC.md`). Remaining:
 
+- **✅ `vs_solution_model` - shipped 1.22.0.** The evaluated project graph (real TFMs, resolved packages incl. transitive with `requestedBy`, project references, active config/platform, analyzers, evaluated MSBuild properties). Follow-ups: **which file set a property** (needs a real `Microsoft.Build` evaluation with `ProjectProperty.Xml.ContainingProject`; today the tool reports the value and which `Directory.Build.*` files are imported, not the exact origin), **CPM transitive pinning** (`centralTransitiveDependencyGroups` in the assets file), **package vulnerability/deprecation** flags (NuGet audit output lands in the restore log, not the assets file), and a **`vs_build`-scoped auto-refresh note** when the assets file is older than the project file.
 - **Transitive callees** - `vs_call_hierarchy direction:callees` is depth-1 only; reconstruct the full callee graph (cycle-guarded like callers).
 - **Rename / safe refactors** - route Roslyn `Renamer`/code-fix edits through the existing diff gate, so each change is still one Accept/Reject. Crosses from read-only navigation into mutation - design the gate carefully.
 - **Per-frame source for the debugger** could reuse the same workspace to map call-stack frames to precise documents.
@@ -90,6 +91,16 @@ Shipped: the IDE's own build driven asynchronously with structured Error List di
 - **Run tests affected by a change** (also listed under the debugger follow-ups): `vs_build` establishes what compiled, the `vs-semantic` call graph establishes what covers it, `Scope.ForSymbol` runs it. All three pieces now exist.
 - **Auto-scope to the edited project.** `vs_build` already resolves a project from any file path inside it; the model has to choose to pass one. A cheap heuristic (build the project owning the most recently edited file, fall back to the solution) would make the common case one obvious call.
 - **C++ verification.** `ErrorListReader` already serves MSVC diagnostics and `demo/CheckoutDemoCpp` exists, but the build path has not been exercised against a `.vcxproj` end to end.
+
+## Panel and diff (1.22.0) - next steps
+
+Shipped: edit-before-accept in the review diff, the live activity card, Generate Tests ([`docs/QOL.md`](docs/QOL.md)). Remaining:
+
+- **Per-tool token attribution on the activity card.** The transcript tail already sees every `tool_result`; sizing them (~4 chars/token) would give the "top context consumers" line the attachments section below describes, on a surface that now exists. Keep the estimate labeling discipline.
+- **Subagent activity.** An `Agent` call shows as one in-flight tool; the subagent's own transcript (a sibling file under the session directory) could be tailed for a nested "what the subagent is doing" line.
+- **Activity for sessions launched outside the extension.** The card needs the transcript path, which arrives via the UserPromptSubmit and permission hooks; a `/ide`-connected session that never loaded the workspace hooks shows nothing. The `ide_connected` notification carries no transcript path, so this waits on the protocol.
+- **Edit-before-accept for `NotebookEdit`.** The rewrite covers `Edit`, `Write` and `MultiEdit`; notebook cells have a different input shape and are not gated today.
+- **Generate Tests: run-affected.** Once "run tests affected by a change" ships (test follow-ups below), the Generate Tests note can name the exact `Scope.ForSymbol` to run instead of asking for the new tests by name.
 
 ## Attachments (1.12.0) — next steps
 

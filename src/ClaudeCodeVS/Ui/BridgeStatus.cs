@@ -207,6 +207,20 @@ internal static class BridgeStatus
     /// session even though one is already connected - bypasses LaunchAction's already-connected guard.</summary>
     public static Func<Task>? RelaunchAction { get; set; }
 
+    /// <summary>Set by BridgeHost: start the CLI with extra arguments (the Sessions card's
+    /// <c>--resume &lt;id&gt;</c> / <c>--continue</c>); always opens a new terminal, even beside a live session.</summary>
+    public static Func<string, Task>? LaunchSessionAction { get; set; }
+
+    /// <summary>Raised when the saved-session list may have changed (a turn ended: the transcript grew, a
+    /// title may have been generated, a new session may exist). The Sessions tab re-lists on it.</summary>
+    public static event Action? SessionsChanged;
+
+    public static void RaiseSessionsChanged() => SessionsChanged?.Invoke();
+
+    /// <summary>Set by BridgeHost: "Switch to session" - focus the window already hosting that session id,
+    /// or resume it in a new terminal when it isn't open.</summary>
+    public static Func<string, Task>? SwitchSessionAction { get; set; }
+
     /// <summary>Set by BridgeHost so the panel can bring the verbose Output pane forward (UI thread).</summary>
     public static Action? ShowOutputAction { get; set; }
 

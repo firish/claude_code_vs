@@ -230,6 +230,21 @@ public sealed class IdeWebSocketServer
                     catch (Exception e) { Log.Warn($"permission-mode observer failed: {e.Message}"); }
                 }
 
+                // Which session is this, and which CLI process runs it? Every hook sends its transcript path
+                // (file name = session id) and its own pid; the CLI is the connected pid that is an ancestor.
+                var seenTranscript = (string?)body["transcript_path"];
+                var seenHookPid = (int?)body["pid"];
+                if (!string.IsNullOrEmpty(seenTranscript) && seenHookPid is > 0 && ProcessTree.Available)
+                {
+                    foreach (var cliPid in ConnectedCliPids())
+                    {
+                        if (!ProcessTree.IsSelfOrAncestor(cliPid, seenHookPid.Value)) continue;
+                        try { SessionObserved?.Invoke(seenTranscript!, cliPid); }
+                        catch (Exception e) { Log.Warn($"session observer failed: {e.Message}"); }
+                        break;
+                    }
+                }
+
                 switch (path)
                 {
                     case "/permission": await HandlePermissionRequestAsync(ctx, body, ct); return;
@@ -287,6 +302,10 @@ public sealed class IdeWebSocketServer
         finally
         {
             _connections.TryRemove(conn, out _);
+            if (conn.CliPid is int gonePid)
+            {
+                try { CliDisconnected?.Invoke(gonePid); } catch (Exception e) { Log.Warn($"CLI-disconnected observer failed: {e.Message}"); }
+            }
             conn.Dispose();
             Log.Info($"client disconnected ({remote})");
             try { ConnectionChanged?.Invoke(HasConnections); } catch { }
@@ -305,6 +324,10 @@ public sealed class IdeWebSocketServer
     /// panel tracks mode changes made with shift+tab instead of only learning about them on the next edit.
     /// </summary>
     public Action<string>? PermissionModeObserved { get; set; }
+
+    /// <summary>Raised with (transcript path, CLI pid) whenever an owned hook POST identifies its session -
+    /// the Sessions card uses it to know which sessions are open and in which CLI process.</summary>
+    public Action<string, int>? SessionObserved { get; set; }
 
     /// <summary>
     /// Raised when the UserPromptSubmit hook POSTs /debug-context - a turn just began - with the session
@@ -593,7 +616,12 @@ public sealed class IdeWebSocketServer
     /// POST from MY session" can only be answered by comparing folder paths, which a SECOND Claude session
     /// in the same tree - one running under VS Code, say - matches exactly as well (issue #42).
     /// </summary>
-    private static void CaptureCliPid(Connection conn, string json)
+    /// <summary>A CLI identified itself (its `ide_connected` pid) / its socket closed. The Sessions card uses
+    /// these to know a session's CLI is alive from the moment it starts, not only after its first hook.</summary>
+    public Action<int>? CliConnected { get; set; }
+    public Action<int>? CliDisconnected { get; set; }
+
+    private void CaptureCliPid(Connection conn, string json)
     {
         if (conn.CliPid is not null) return;
         if (json.IndexOf("ide_connected", StringComparison.Ordinal) < 0) return;
@@ -606,6 +634,7 @@ public sealed class IdeWebSocketServer
             {
                 conn.CliPid = pid;
                 Log.Info($"CLI session identified: pid {pid} (edit gate will only answer for this process tree)");
+                try { CliConnected?.Invoke(pid.Value); } catch (Exception e) { Log.Warn($"CLI-connected observer failed: {e.Message}"); }
             }
         }
         catch { /* malformed notification - stay on the path-based fallback */ }

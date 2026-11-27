@@ -41,6 +41,25 @@ internal static class Strings
     internal static string TipExternalConsole => S(nameof(TipExternalConsole));
     internal static string BtnRelaunch => S(nameof(BtnRelaunch));
 
+    // ---- Panel: sessions ----
+    internal static string SessionsHeader => S(nameof(SessionsHeader));
+    internal static string BtnSessionsRefresh => S(nameof(BtnSessionsRefresh));
+    internal static string BtnSessionsNew => S(nameof(BtnSessionsNew));
+    internal static string TipSessionResume => S(nameof(TipSessionResume));
+    internal static string SessionMenuSwitch => S(nameof(SessionMenuSwitch));
+    internal static string SessionMenuRename => S(nameof(SessionMenuRename));
+    internal static string FeedMenuCopy => S(nameof(FeedMenuCopy));
+    internal static string FeedMenuSelectAll => S(nameof(FeedMenuSelectAll));
+    internal static string SessionMenuDelete => S(nameof(SessionMenuDelete));
+    internal static string SessionDeleteTitle => S(nameof(SessionDeleteTitle));
+    internal static string SessionDeleteConfirmFormat => S(nameof(SessionDeleteConfirmFormat));
+    internal static string SessionDeleteOpen => S(nameof(SessionDeleteOpen));
+    internal static string RenameTitle => S(nameof(RenameTitle));
+    internal static string RenamePrompt => S(nameof(RenamePrompt));
+    internal static string BtnRenameOk => S(nameof(BtnRenameOk));
+    internal static string SessionsEmpty => S(nameof(SessionsEmpty));
+    internal static string SessionActive => S(nameof(SessionActive));
+
     // ---- Panel: toggles ----
     internal static string ToggleAutoAccept => S(nameof(ToggleAutoAccept));
     internal static string TipAutoAccept => S(nameof(TipAutoAccept));

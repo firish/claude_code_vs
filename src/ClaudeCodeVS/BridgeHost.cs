@@ -78,6 +78,9 @@ internal sealed class BridgeHost : IDisposable
         Ui.BridgeStatus.LaunchAction = () => LaunchClaudeAsync();
         Ui.BridgeStatus.LaunchExternalAction = () => LaunchClaudeAsync(forceExternal: true);
         Ui.BridgeStatus.RelaunchAction = () => LaunchClaudeAsync(forceRelaunch: true);
+        Ui.BridgeStatus.LaunchSessionAction = args => LaunchClaudeAsync(claudeArgs: args);
+        Ui.BridgeStatus.SwitchSessionAction = id => SwitchToSessionAsync(id);
+        Ui.BridgeStatus.SessionsChanged += () => _ = RefreshTerminalTitlesAsync();
         Ui.BridgeStatus.ShowOutputAction = () => pane.Activate(); // panel's "Output" button (UI thread)
         Ui.BridgeStatus.FocusClaudeAction = () => FocusClaudeAsync(); // context actions: focus so Enter sends
         Log.Info("Claude Code bridge starting…");
@@ -170,6 +173,15 @@ internal sealed class BridgeHost : IDisposable
         // prompt or turn end instead of waiting for an edit that may never come.
         _server.PermissionModeObserved = mode => Ui.BridgeStatus.SetCliPermissionMode(mode);
 
+        // Sessions card: learn which session runs in which CLI process, so Switch can focus an open one.
+        _server.SessionObserved = (transcript, cliPid) =>
+        {
+            var id = Sessions.SessionStore.IdFromTranscriptPath(transcript);
+            if (id != null) Sessions.SessionWindows.Observe(id, cliPid);
+        };
+        _server.CliConnected = pid => Sessions.SessionWindows.CliConnected(pid);
+        _server.CliDisconnected = pid => Sessions.SessionWindows.CliDisconnected(pid);
+
         // Stats: the Stop hook POSTs the transcript path to /usage; we parse it for tokens/cost.
         _server.UsageHandler = UsageTracker.UpdateFromTranscriptAsync;
 
@@ -192,6 +204,7 @@ internal sealed class BridgeHost : IDisposable
         {
             Activity.TranscriptTail.Stop();   // one last read picks up the final tool_result
             Activity.AgentActivity.TurnEnded();
+            Ui.BridgeStatus.RaiseSessionsChanged(); // the Sessions tab re-lists (new transcript / title)
         };
 
         // Debug awareness: the UserPromptSubmit hook POSTs to /debug-context; we read the live VS
@@ -803,8 +816,11 @@ internal sealed class BridgeHost : IDisposable
     /// tools didn't load" banner's Relaunch button deliberately re-pinning a misconfigured session, which
     /// is exactly the case the guard would otherwise block; it refuses instead when no workspace is open.
     /// </summary>
-    public async Task LaunchClaudeAsync(bool forceExternal = false, bool forceRelaunch = false)
+    public async Task LaunchClaudeAsync(bool forceExternal = false, bool forceRelaunch = false, string? claudeArgs = null)
     {
+        // Session-manager launches (--resume / --continue) are deliberate: like Relaunch they bypass the
+        // already-connected guard, since a second session next to a live one is the whole point.
+        if (claudeArgs != null) forceRelaunch = true;
         if (_lockfile is null)
         {
             Log.Warn("Launch Claude Code: bridge isn't running yet.");
@@ -829,12 +845,18 @@ internal sealed class BridgeHost : IDisposable
             // up terminals exactly the same way whichever button produced it - and Relaunch is clicked
             // from a banner that stays up for the seconds the new session needs to connect, so it invites
             // the double-click this catches.
-            if (DateTime.UtcNow - _lastLaunchUtc < LaunchCooldown)
+            // A Sessions-card resume of a SPECIFIC session is exempt: opening a second, different session
+            // right after the first is deliberate, and the same session can't pile up - SwitchToSessionAsync
+            // guards it per id (in-flight set, then the window registry).
+            if (ResumeIdOf(claudeArgs) == null)
             {
-                Log.Warn("Launch Claude Code: a session is still starting - give it a few seconds.");
-                return;
+                if (DateTime.UtcNow - _lastLaunchUtc < LaunchCooldown)
+                {
+                    Log.Warn("Launch Claude Code: a session is still starting - give it a few seconds.");
+                    return;
+                }
+                _lastLaunchUtc = DateTime.UtcNow;
             }
-            _lastLaunchUtc = DateTime.UtcNow;
         }
 
         // Reap zombie lockfiles (dead/recycled-PID instances) before launching, so the CLI's /ide and
@@ -866,9 +888,26 @@ internal sealed class BridgeHost : IDisposable
         // Prefer VS's own native Terminal tool window (undocumented, no NuGet package - see
         // Terminal/VsTerminalLauncher.cs). TryLaunchAsync never throws; on ANY failure it logs via
         // Log.Warn and returns false, so the external cmd.exe console below is always the safety net.
+        string? resumeId = ResumeIdOf(claudeArgs);
+        // A resumed session's tab opens under its title; a new one starts as "Claude Code" and is retitled
+        // once it has one (RefreshTerminalTitlesAsync, on every turn end / rename).
+        string? tabTitle = resumeId == null ? null : Sessions.SessionStore.TitleFor(workspace, resumeId);
+        // Registered before the terminal exists so the CLI's ide_connected (which can beat the launcher's
+        // own tab bookkeeping) has an entry to claim - see SessionWindows.BeginLaunch.
+        var launch = Sessions.SessionWindows.BeginLaunch(resumeId);
         if (!forceExternal &&
-            await Terminal.VsTerminalLauncher.TryLaunchAsync(workspace, _lockfile.Port, _cts.Token))
+            await Terminal.VsTerminalLauncher.TryLaunchAsync(workspace, _lockfile.Port, _cts.Token, claudeArgs, tabTitle))
+        {
+            var tab = Terminal.VsTerminalLauncher.LastTerminal;
+            var frame = Terminal.VsTerminalLauncher.LastFrame;
+            Sessions.SessionWindows.CompleteLaunch(launch,
+                tab == Guid.Empty && frame != null
+                    ? () => Terminal.VsTerminalLauncher.TryShowFrameAsync(frame, _cts.Token)
+                    : () => Terminal.VsTerminalLauncher.TryFocusAsync(_cts.Token, tab),
+                frame == null ? null : title => Terminal.VsTerminalLauncher.TrySetCaption(frame, title),
+                tabTitle);
             return;
+        }
 
         // Launch in DEFAULT permission mode. We tried --permission-mode acceptEdits to drop the CLI's
         // terminal edit-prompt, but verified it makes the CLI auto-apply edits and NOT call openDiff at
@@ -884,7 +923,7 @@ internal sealed class BridgeHost : IDisposable
             // edits, so the checkbox and the session agree from the first prompt. (A RUNNING session's
             // mode cannot be changed from outside; mid-session the checkbox still auto-allows on the
             // bridge side, and shift+tab in the terminal is the CLI-side lever.)
-            Arguments = "/K claude" + (Ui.BridgeStatus.AutoAcceptEdits ? " --permission-mode acceptEdits" : ""), // /K keeps the window open after claude exits
+            Arguments = "/K claude" + (string.IsNullOrEmpty(claudeArgs) ? "" : " " + claudeArgs) + (Ui.BridgeStatus.AutoAcceptEdits ? " --permission-mode acceptEdits" : ""), // /K keeps the window open after claude exits
             UseShellExecute = false,                 // required to pass Environment below
             CreateNoWindow = false,                  // give it its own console window
         };
@@ -896,15 +935,95 @@ internal sealed class BridgeHost : IDisposable
         try
         {
             _externalCli = Process.Start(psi); // kept so the context actions can refocus its window
+            var console = _externalCli;
+            if (console != null)
+                Sessions.SessionWindows.CompleteLaunch(launch, () => Task.FromResult(FocusProcessWindow(console)));
+            else
+                Sessions.SessionWindows.CancelLaunch(launch);
             Log.Info($"Launched Claude Code (port {_lockfile.Port}, cwd '{workspace ?? "(default)"}').");
         }
         catch (Exception e)
         {
+            Sessions.SessionWindows.CancelLaunch(launch);
             Log.Error($"Launch Claude Code failed: {e.Message}");
         }
     }
 
     private Process? _externalCli;
+
+    private static string? ResumeIdOf(string? claudeArgs)
+    {
+        const string flag = "--resume ";
+        if (claudeArgs == null || !claudeArgs.StartsWith(flag, StringComparison.Ordinal)) return null;
+        return claudeArgs.Substring(flag.Length).Trim();
+    }
+
+    /// <summary>
+    /// "Switch to session": if the session is already open in a window we launched, bring that window to
+    /// the front; if it's open in a terminal we didn't launch, say so (we hold no handle to it); otherwise
+    /// resume it in a new terminal. A focus that fails (tab closed, console gone) falls through to a resume.
+    /// </summary>
+    public async Task SwitchToSessionAsync(string sessionId)
+    {
+        // A launch of this session is already under way (its window isn't registered until the terminal
+        // exists, which takes seconds): a repeat double-click must not open a second copy.
+        lock (_launchingSessions)
+            if (!_launchingSessions.Add(sessionId)) return;
+        try { await SwitchToSessionCoreAsync(sessionId); }
+        finally { lock (_launchingSessions) _launchingSessions.Remove(sessionId); }
+    }
+
+    private readonly HashSet<string> _launchingSessions = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task SwitchToSessionCoreAsync(string sessionId)
+    {
+        switch (Sessions.SessionWindows.Check(sessionId))
+        {
+            case Sessions.SessionWindows.Presence.OpenFocusable:
+                if (await Sessions.SessionWindows.TryFocusAsync(sessionId)) return;
+                break; // stale: its window is gone, so the session isn't really open
+            case Sessions.SessionWindows.Presence.OpenElsewhere:
+                Log.Info($"session {sessionId} is already open in a terminal started outside Visual Studio - switch to that window");
+                return;
+        }
+        await LaunchClaudeAsync(claudeArgs: "--resume " + sessionId);
+    }
+
+    /// <summary>Retitle our terminal tabs to their sessions' current titles. Reads titles off the UI thread.</summary>
+    private async Task RefreshTerminalTitlesAsync()
+    {
+        try
+        {
+            await TaskScheduler.Default;
+            string? workspace = Ui.BridgeStatus.Workspace;
+            var updates = Sessions.SessionWindows.PlanTitleUpdates(id => Sessions.SessionStore.TitleFor(workspace, id));
+            if (updates.Count == 0) return;
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(_cts.Token);
+            foreach (var apply in updates) apply();
+        }
+        catch (Exception e)
+        {
+            Log.Event($"terminal retitle failed (harmless): {e.Message}");
+        }
+    }
+
+    private static bool FocusProcessWindow(Process p)
+    {
+        try
+        {
+            p.Refresh();
+            if (p.HasExited || p.MainWindowHandle == IntPtr.Zero) return false;
+            if (IsIconic(p.MainWindowHandle)) ShowWindow(p.MainWindowHandle, 9 /* SW_RESTORE */);
+            return SetForegroundWindow(p.MainWindowHandle);
+        }
+        catch { return false; }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     /// <summary>
     /// Bring the claude session's input to the foreground so Enter sends what a context action just

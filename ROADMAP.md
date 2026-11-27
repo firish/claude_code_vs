@@ -49,9 +49,9 @@ Both failure modes below are now fixed: orphaned `openDiff` diffs are rejected a
 
 ## Phase 3 - VS 2022 verification
 
-**What:** The manifest targets `[17.14, 19.0)` (VS 2022 17.14+ through VS 2026) to satisfy Marketplace policy, but the extension has only been tested on VS 2026. VS 2022 may load it — the in-proc SDK calls (`IVsDifferenceService`, the WPF differencing factory, Roslyn workspace, `IVsRunningDocumentTable`) are not 2026-specific — but it is unverified.
+**What:** The manifest targets `[17.10, 19.0)` (VS 2022 17.10+ through VS 2026; compile refs pinned to 17.10) to satisfy Marketplace policy, but the extension has only been tested on VS 2026. VS 2022 may load it — the in-proc SDK calls (`IVsDifferenceService`, the WPF differencing factory, Roslyn workspace, `IVsRunningDocumentTable`) are not 2026-specific — but it is unverified.
 
-**Cost:** test the Release `.vsix` on a clean VS 2022 17.14+ install and fix any API incompatibilities.
+**Cost:** test the Release `.vsix` on a clean VS 2022 17.10 install (the floor) and on 17.14 and fix any API incompatibilities.
 
 **Trigger:** do this when GitHub issue demand or download numbers justify it.
 

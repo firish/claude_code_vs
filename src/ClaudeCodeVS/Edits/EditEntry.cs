@@ -9,6 +9,16 @@ namespace ClaudeCodeVs.Edits;
 /// detail to render it. Deliberately a flat row per hunk rather than a tree grouped by file - a single
 /// turn rarely produces enough entries for grouping to pay for itself.
 /// </summary>
+internal sealed class EditSnapshot
+{
+    /// <summary>Above this the texts aren't kept: the turn history holds several turns of them.</summary>
+    public const int MaxChars = 2 * 1024 * 1024;
+
+    public EditSnapshot(string before, string after) { Before = before; After = after; }
+    public string Before { get; }
+    public string After { get; }
+}
+
 internal sealed class EditEntry
 {
     public string FilePath = "";
@@ -20,6 +30,9 @@ internal sealed class EditEntry
     public bool Rewritten;         // too many hunks to list: this row stands for the whole file
     public int TotalLines;         // for the rewritten label
     public DateTime When = DateTime.Now;
+    /// <summary>The file before and after the edit, for the panel's "Show diff". Shared by every row of
+    /// one edit; null when not kept (very large files).</summary>
+    public EditSnapshot? Snapshot;
 
     /// <summary>1-based line label, e.g. "22" or "47-51". Empty for a rewritten-file row.</summary>
     public string LineLabel => Rewritten

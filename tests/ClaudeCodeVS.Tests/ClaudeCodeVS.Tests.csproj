@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Unit tests for the extension's pure logic - the parts that need no running Visual Studio: the EDITS
+    folder tree, usage-limit parsing, the CLI session store (titles, stubs, rename, delete, preview), the
+    hook installer's statusLine handling, and the edit-snapshot memory budget. Everything that touches a
+    VS service stays out of here; those paths are verified live.
+
+    Run (VS MSBuild + vstest, no `dotnet build`):
+      msbuild tests/ClaudeCodeVS.Tests/ClaudeCodeVS.Tests.csproj -restore -p:Configuration=Release
+      vstest.console.exe tests/ClaudeCodeVS.Tests/bin/Release/net48/ClaudeCodeVS.Tests.dll
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>ClaudeCodeVS.Tests</AssemblyName>
+    <RootNamespace>ClaudeCodeVs.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="MSTest.TestAdapter" Version="2.1.2" />
+    <PackageReference Include="MSTest.TestFramework" Version="2.1.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClaudeCodeVS\ClaudeCodeVS.csproj" />
+    <ProjectReference Include="..\..\src\ClaudeCodeVS.Protocol\ClaudeCodeVS.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

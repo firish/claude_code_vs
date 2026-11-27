@@ -1,14 +1,20 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using System.Windows.Automation;
 using ClaudeCodeVs.Protocol;
+using Microsoft.VisualStudio.Imaging;
+using Microsoft.VisualStudio.Imaging.Interop;
+using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeCodeVs.Ui;
@@ -33,6 +39,8 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private static readonly Brush DotIdle = Freeze(Color.FromRgb(0x9A, 0x9A, 0x9A));
     private static readonly Brush ErrText = Freeze(Color.FromRgb(0xE0, 0x6C, 0x5C));
     private static readonly Brush WarnText = Freeze(Color.FromRgb(0xD0, 0x9A, 0x36));
+    // Mid gray reads as secondary text on both dark and light themes.
+    private static readonly Brush DimText = Freeze(Color.FromRgb(0x8A, 0x8A, 0x8A));
     // Translucent amber for the "tools didn't load" banner - reads on dark and light like the gray chips.
     private static readonly Brush WarnFill = Freeze(Color.FromArgb(30, 0xD0, 0x9A, 0x36));
     private static readonly Brush WarnBorder = Freeze(Color.FromArgb(96, 0xD0, 0x9A, 0x36));
@@ -41,6 +49,8 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly Ellipse _dot;
     private readonly TextBlock _statusLine;
     private readonly TextBlock _endpointLine;
+    private readonly Grid _usageGrid;
+    private string? _usageSignature;
     private readonly TextBlock _editsLine;
     private readonly TextBlock _debugLine;
     private readonly TextBlock _latestLine;
@@ -54,13 +64,15 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly CheckBox _allowDrive;
     private readonly CheckBox _allowCapture;
     private readonly CheckBox _notify;
-    private readonly ListBox _feed;
+    private readonly CheckBox _usageToggle;
+    private readonly RichTextBox _feed;
     private readonly WrapPanel _attachChips;
     private readonly Button _attachClear;
     private readonly TextBlock _attachSummary;
     private readonly DispatcherTimer _timer;
-    private readonly Border _editsCard;
-    private readonly TextBlock _editsHeader;
+    private readonly FrameworkElement _editsCard;
+    private readonly TextBlock _editsEmpty;
+    private Edits.EditEntry[] _renderedEdits = Array.Empty<Edits.EditEntry>();
     private readonly ItemsControl _editsList;
     private readonly Border _activityCard;
     private readonly Ellipse _activityDot;
@@ -73,6 +85,21 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly TextBlock _costText;
     private readonly Button _costButton;
     private bool _showCost;
+    private readonly StackPanel _sessionsList;
+    private readonly TextBox _sessionsFilter;
+    private readonly FrameworkElement _sessionsCard;
+    private readonly Border _tabActivity;
+    private readonly Border _tabEdits;
+    private readonly Border _tabSessions;
+    private readonly RowDefinition _topRow;
+    private readonly RowDefinition _tabsRow;
+
+    private enum PanelTab { Activity, Edits, Sessions }
+
+    /// <summary>The tab area never shrinks below this; the top section scrolls instead.</summary>
+    private const double TabsMinHeight = 200;
+    private const double SplitterHeight = 9;
+    private int _sessionsLoadGen; // a slow listing must not overwrite a newer one
 
     public ClaudeToolWindowControl()
     {
@@ -81,10 +108,18 @@ internal sealed class ClaudeToolWindowControl : UserControl
         SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
         FontScale.BindRoot(this);
 
+        // Layout: [top section: status, toolbar, cards - scrolls when it doesn't fit]
+        //         [splitter: drag to move the boundary, double-click to reset]
+        //         [tabs: ACTIVITY / EDITS / SESSIONS - always at least TabsMinHeight tall]
+        // The top row is Auto but capped (see ClampTopRow), so a tall top section scrolls instead of
+        // pushing the tabs off the bottom of the panel.
         var root = new Grid { Margin = new Thickness(10, 8, 10, 8) };
-        for (int i = 0; i < 9; i++)
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // feed
+        _topRow = new RowDefinition { Height = GridLength.Auto };
+        _tabsRow = new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = TabsMinHeight };
+        root.RowDefinitions.Add(_topRow);
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(_tabsRow);
+        var topStack = new StackPanel();
 
         // ---- Row 0: header (status pill) ----
         // No "Claude Code" text here: the tool window's own Caption (ClaudeToolWindow.cs) already shows
@@ -100,24 +135,38 @@ internal sealed class ClaudeToolWindowControl : UserControl
 
         _endpointLine = Font(new TextBlock { Opacity = 0.65, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0) }, 0.92);
         header.Children.Add(_endpointLine);
+
+        // Subscription usage (5-hour / weekly / spend windows), relayed from the CLI's status line.
+        // Collapsed until a session has reported it - API-key sessions never do.
+        // One row per window: label | fill bar | "42% · resets 14:30" (built by RenderUsage).
+        _usageGrid = new Grid
+        {
+            Margin = new Thickness(0, 6, 0, 0),
+            Visibility = Visibility.Collapsed,
+            ToolTip = Strings.UsageTooltip,
+        };
+        _usageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        _usageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 40 });
+        _usageGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(_usageGrid);
         Grid.SetRow(header, 0);
 
         // ---- Row 1: toolbar ----
         // One flat WrapPanel for all four buttons (no DockPanel right-docking): docking Clear/Output to
         // the right pre-claims width, which clipped the Launch buttons mid-text at narrow panel widths.
         // Wrapping keeps every button whole and reachable at any width; right-alignment wasn't worth that.
+        // Icon buttons (VS's own KnownMonikers, themed) with the old labels as tooltips: one compact row
+        // instead of two rows of wide text buttons and four checkboxes.
         var toolbar = new WrapPanel { Margin = new Thickness(0) };
-        toolbar.Children.Add(MakeButton(Strings.BtnLaunch, () => { _ = BridgeStatus.LaunchAction?.Invoke(); }));
-        var launchExternal = MakeButton(Strings.BtnExternalConsole, () => { _ = BridgeStatus.LaunchExternalAction?.Invoke(); });
-        launchExternal.ToolTip = Strings.TipExternalConsole;
-        toolbar.Children.Add(launchExternal);
-        toolbar.Children.Add(MakeButton(Strings.BtnClear, () => _feed!.Items.Clear()));
-        toolbar.Children.Add(MakeButton(Strings.BtnOutput, () => { try { BridgeStatus.ShowOutputAction?.Invoke(); } catch { } }));
+        toolbar.Children.Add(MakeIconButton(KnownMonikers.Run, Strings.BtnLaunch, () => { _ = BridgeStatus.LaunchAction?.Invoke(); }));
+        toolbar.Children.Add(MakeIconButton(KnownMonikers.Console, Strings.BtnExternalConsole + "\n" + Strings.TipExternalConsole,
+            () => { _ = BridgeStatus.LaunchExternalAction?.Invoke(); }));
+        toolbar.Children.Add(MakeIconButton(KnownMonikers.Output, Strings.BtnOutput, () => { try { BridgeStatus.ShowOutputAction?.Invoke(); } catch { } }));
 
-        // The toggles get their own WRAPPING row: four checkboxes stopped fitting beside the buttons at
-        // a typically-docked panel width (they were simply invisible until the panel was widened), and a
-        // WrapPanel keeps every one reachable at any size. Each also carries a what-it-does tooltip.
-        var toggles = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        // The four toggles live in a popup under a gear button. The checkboxes themselves (and all their
+        // state syncing in UpdateStatus) are unchanged - only where they sit. The gear carries an amber dot
+        // while any SAFETY toggle is on, so a hidden "run wild" is never invisible.
+        var toggles = new StackPanel { Margin = new Thickness(0) };
         _autoAccept = new CheckBox
         {
             Content = Strings.ToggleAutoAccept,
@@ -176,9 +225,27 @@ internal sealed class ClaudeToolWindowControl : UserControl
         _notify.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
         toggles.Children.Add(_notify);
 
+        // Usage row: our statusLine relays the CLI's subscription limits here. A convenience with a cost
+        // (one PowerShell per status-line refresh), so it can be turned off - which also puts the user's
+        // own status line back. Re-applied to the workspace right away; new sessions pick it up.
+        _usageToggle = new CheckBox
+        {
+            Content = Strings.ToggleUsage,
+            ToolTip = Strings.TipUsageToggle,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsChecked = BridgeStatus.UsageStatusLine,
+        };
+        _usageToggle.Checked += (s, e) => ApplyUsageToggle(true);
+        _usageToggle.Unchecked += (s, e) => ApplyUsageToggle(false);
+        _usageToggle.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        toggles.Children.Add(_usageToggle);
+
+        foreach (var box in new[] { _autoAccept, _allowDrive, _allowCapture, _notify, _usageToggle })
+            box.Margin = new Thickness(0, 3, 0, 3);
+        toolbar.Children.Add(MakeSettingsButton(toggles));
+
         var toolbarStack = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
         toolbarStack.Children.Add(toolbar);
-        toolbarStack.Children.Add(toggles);
         Grid.SetRow(toolbarStack, 1);
 
         // ---- Row 2: "extra tools didn't load" banner (collapsed unless the PULL MCP servers failed) ----
@@ -283,23 +350,28 @@ internal sealed class ClaudeToolWindowControl : UserControl
         };
         Grid.SetRow(_pendingCard, 5);
 
-        // ---- Row 6: edits this turn (collapsed when none) ----
+        // ---- Edits this turn: the EDITS tab ----
         // Issue #44: the CLI prints "changed Foo.cs:1234" in the terminal and VS's terminal has no link
         // provider we can hook, so the jump targets live here instead. Scoped to the current turn (the
-        // UserPromptSubmit hook marks the list stale, the next edit replaces it) so it stays a handful of
-        // rows and needs no cap in practice. One row per HUNK, which is finer than the CLI's one per edit.
-        _editsHeader = Font(new TextBlock
-        {
-            FontWeight = FontWeights.SemiBold,
-            Opacity = 0.55,
-            Margin = new Thickness(2, 0, 0, 4),
-        }, 0.83);
+        // UserPromptSubmit hook marks the list stale, the next edit replaces it). One row per HUNK, which is
+        // finer than the CLI's one per edit - a big turn easily reaches dozens, which is why the list lives
+        // in its own scrolling tab instead of growing the panel's top section past the screen.
+        _editsEmpty = Font(new TextBlock { Text = Strings.EditsEmpty, Opacity = 0.6, Margin = new Thickness(2, 2, 0, 2) }, 0.92);
         _editsList = new ItemsControl { Margin = new Thickness(0, 0, 0, 8) };
         var editsStack = new StackPanel();
-        editsStack.Children.Add(_editsHeader);
+        // The stats card (edit decisions, debugger use, tokens/cost) heads this tab rather than the panel's
+        // top section: it is reference material, not something to keep in view while working.
+        editsStack.Children.Add(statsCard);
+        // Which turn's edits to show: the current one, or one of the last few (BridgeStatus.EditHistory).
+        _editsTurnButton = MakeButton("", () => ShowTurnPicker());
+        _editsTurnButton.HorizontalAlignment = HorizontalAlignment.Left;
+        _editsTurnButton.Margin = new Thickness(0, 0, 0, 6);
+        _editsTurnButton.ToolTip = Strings.TipEditsTurn;
+        _editsTurnButton.Visibility = Visibility.Collapsed; // until RefreshEdits has a label and an earlier turn
+        editsStack.Children.Add(_editsTurnButton);
+        editsStack.Children.Add(_editsEmpty);
         editsStack.Children.Add(_editsList);
-        _editsCard = new Border { Visibility = Visibility.Collapsed, Child = editsStack };
-        Grid.SetRow(_editsCard, 6);
+        _editsCard = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = editsStack };
 
         // ---- Row 7: attachments (drop/paste target + staged chips) ----
         // Screenshots can't be pasted into the CLI on Windows (open upstream gap), so the panel is the
@@ -360,32 +432,185 @@ internal sealed class ClaudeToolWindowControl : UserControl
         // Ctrl+V anywhere in the panel = the Paste image button.
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, (s, e) => PasteFromClipboard()));
 
-        // ---- Row 8: feed label ----
-        var feedLabel = Font(new TextBlock { Text = Strings.FeedLabel, FontWeight = FontWeights.SemiBold, Opacity = 0.55, Margin = new Thickness(2, 0, 0, 4) }, 0.83);
-        Grid.SetRow(feedLabel, 8);
-
-        // ---- Row 9: curated activity feed ----
-        _feed = new ListBox
+        // Tab switching from the keyboard. Ctrl+PageDown/PageUp always reach the panel; Ctrl+Tab only when VS
+        // doesn't claim it first for its own window switcher.
+        PreviewKeyDown += (s, e) =>
         {
+            if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            bool back = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            if (key == Key.Tab) { CycleTab(back ? -1 : 1); e.Handled = true; }
+            else if (key == Key.PageDown) { CycleTab(1); e.Handled = true; }
+            else if (key == Key.PageUp) { CycleTab(-1); e.Handled = true; }
+        };
+
+        // ---- Row 8: sessions (past CLI sessions of this workspace; double-click = resume) ----
+        // The CLI owns the session store (~/.claude/projects/...); we only list it and launch
+        // `claude --resume <id>` / `--continue` in a new terminal. Collapsed by default: zero panel height
+        // until the user wants it.
+        var sessionsBar = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+        sessionsBar.Children.Add(MakeButton(Strings.BtnSessionsNew, () => { _ = BridgeStatus.LaunchSessionAction?.Invoke(""); }));
+        sessionsBar.Children.Add(MakeButton(Strings.BtnSessionsRefresh, RefreshSessions));
+        // Filter by title; re-renders the last listing without touching the disk.
+        _sessionsFilter = Font(new TextBox { Width = 160, Padding = new Thickness(3, 2, 3, 2), VerticalContentAlignment = VerticalAlignment.Center }, 0.96);
+        _sessionsFilter.SetResourceReference(BackgroundProperty, VsBrushes.WindowKey);
+        _sessionsFilter.SetResourceReference(ForegroundProperty, VsBrushes.WindowTextKey);
+        _sessionsFilter.SetResourceReference(TextBox.CaretBrushProperty, VsBrushes.WindowTextKey);
+        _sessionsFilter.SetResourceReference(BorderBrushProperty, VsBrushes.ComboBoxBorderKey);
+        var filterHint = Font(new TextBlock { Text = Strings.SessionsFilterHint, Opacity = 0.5, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false }, 0.96);
+        filterHint.SetResourceReference(ForegroundProperty, VsBrushes.WindowTextKey);
+        _sessionsFilter.TextChanged += (s, e) =>
+        {
+            filterHint.Visibility = _sessionsFilter.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            RenderSessions(_lastSessions, _lastActiveId);
+        };
+        var filterBox = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        filterBox.Children.Add(_sessionsFilter);
+        filterBox.Children.Add(filterHint);
+        sessionsBar.Children.Add(filterBox);
+        _sessionsList = new StackPanel();
+        var sessionsScroll = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = _sessionsList,
+        };
+        var sessionsPane = new DockPanel { LastChildFill = true, Focusable = true, FocusVisualStyle = null };
+        sessionsPane.PreviewKeyDown += OnSessionsKeyDown;
+        DockPanel.SetDock(sessionsBar, Dock.Top);
+        sessionsPane.Children.Add(sessionsBar);
+        sessionsPane.Children.Add(sessionsScroll);
+
+        // ---- Row 8: tabs - Activity (curated feed) and Sessions share the one stretchy row ----
+        // A read-only RichTextBox, not a ListBox: the text can be selected across lines and copied
+        // (Ctrl+C / context menu), which a list of TextBlocks can't do. One Paragraph per line keeps the
+        // per-level colors. Wrapping is a context-menu toggle, off by default (ApplyFeedWrap).
+        _feed = Font(new RichTextBox
+        {
+            IsReadOnly = true,
+            IsReadOnlyCaretVisible = false,
             BorderThickness = new Thickness(1),
             BorderBrush = Divider,
             Background = Brushes.Transparent,
-            ItemContainerStyle = FlatItemStyle(),
-        };
-        ScrollViewer.SetHorizontalScrollBarVisibility(_feed, ScrollBarVisibility.Auto);
+            FontFamily = Mono,
+            Padding = new Thickness(2),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Document = new FlowDocument { PagePadding = new Thickness(0) },
+        }, 0.96);
         _feed.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
-        Grid.SetRow(_feed, 9);
+        var feedMenu = MakeThemedMenu();
+        var copyItem = new MenuItem { Header = Strings.FeedMenuCopy, Command = ApplicationCommands.Copy, CommandTarget = _feed };
+        var selectAllItem = new MenuItem { Header = Strings.FeedMenuSelectAll, Command = ApplicationCommands.SelectAll, CommandTarget = _feed };
+        feedMenu.Items.Add(copyItem);
+        feedMenu.Items.Add(selectAllItem);
+        var wrapItem = new MenuItem { Header = Strings.FeedMenuWrap, IsCheckable = true, IsChecked = BridgeStatus.FeedWrap };
+        wrapItem.Click += (s, e) =>
+        {
+            BridgeStatus.SetFeedWrap(wrapItem.IsChecked);
+            ApplyFeedWrap();
+        };
+        feedMenu.Items.Add(wrapItem);
+        // Timestamps and the warnings-only filter re-render the whole feed from the log snapshot.
+        var timeItem = new MenuItem { Header = Strings.FeedMenuTimestamps, IsCheckable = true };
+        timeItem.Click += (s, e) => { BridgeStatus.SetFeedTimestamps(timeItem.IsChecked); ReloadFeed(); };
+        feedMenu.Items.Add(timeItem);
+        var warnItem = new MenuItem { Header = Strings.FeedMenuWarningsOnly, IsCheckable = true };
+        warnItem.Click += (s, e) => { BridgeStatus.SetFeedWarningsOnly(warnItem.IsChecked); ReloadFeed(); };
+        feedMenu.Items.Add(warnItem);
+        var clearItem = new MenuItem { Header = Strings.BtnClear };
+        clearItem.Click += (s, e) => ClearFeed();
+        feedMenu.Items.Add(clearItem);
+        feedMenu.Opened += (s, e) =>
+        {
+            wrapItem.IsChecked = BridgeStatus.FeedWrap;
+            timeItem.IsChecked = BridgeStatus.FeedTimestamps;
+            warnItem.IsChecked = BridgeStatus.FeedWarningsOnly;
+        };
+        _feed.ContextMenu = feedMenu;
+        ApplyFeedWrap();
 
-        root.Children.Add(header);
-        root.Children.Add(toolbarStack);
-        root.Children.Add(_toolsWarningCard);
-        root.Children.Add(statsCard);
-        root.Children.Add(_activityCard);
-        root.Children.Add(_pendingCard);
-        root.Children.Add(_editsCard);
-        root.Children.Add(attachCard);
-        root.Children.Add(feedLabel);
-        root.Children.Add(_feed);
+        // Hand-rolled tab strip rather than TabControl: the stock one ignores the VS theme in a tool
+        // window; this is two themed headers with an accent underline, like the Output window's tabs.
+        _tabActivity = MakeTabHeader(Strings.FeedLabel, () => SelectTab(PanelTab.Activity), out _tabActivityBadge);
+        _tabEdits = MakeTabHeader(Strings.TabEdits, () => SelectTab(PanelTab.Edits), out _tabEditsBadge);
+        _tabSessions = MakeTabHeader(Strings.SessionsHeader, () => SelectTab(PanelTab.Sessions), out _tabSessionsBadge);
+        _tabActivityBadge.Text = "●";
+        _tabSessionsBadge.Foreground = OpenDot;
+        var tabStrip = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+        tabStrip.Children.Add(_tabSessions);
+        tabStrip.Children.Add(_tabEdits);
+        tabStrip.Children.Add(_tabActivity);
+
+        _sessionsCard = sessionsPane;
+        var tabBody = new Grid();
+        tabBody.Children.Add(_feed);
+        tabBody.Children.Add(_editsCard);
+        tabBody.Children.Add(sessionsPane);
+        var tabHost = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(tabStrip, Dock.Top);
+        tabHost.Children.Add(tabStrip);
+        tabHost.Children.Add(tabBody);
+        Grid.SetRow(tabHost, 2);
+        // The last tab the user picked (SESSIONS, the first tab, on a fresh install); its content loads
+        // once the panel is wired (Attach).
+        SelectTab(Enum.TryParse(PanelSettings.GetString(PanelSettings.SelectedTabKey, ""), out PanelTab savedTab) ? savedTab : PanelTab.Sessions);
+        _layoutRestored = true;
+
+        topStack.Children.Add(header);
+        topStack.Children.Add(toolbarStack);
+        topStack.Children.Add(_toolsWarningCard);
+        topStack.Children.Add(_activityCard);
+        topStack.Children.Add(_pendingCard);
+        topStack.Children.Add(attachCard);
+        var topScroll = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = topStack,
+        };
+        Grid.SetRow(topScroll, 0);
+
+        // The boundary between the two is the user's to move; double-click gives it back to Auto,
+        // and whichever mode is current (Auto or a dragged height) is what the next VS session starts in.
+        var splitter = new GridSplitter
+        {
+            Height = SplitterHeight,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+            ResizeDirection = GridResizeDirection.Rows,
+            ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+            Background = Brushes.Transparent,
+            Cursor = Cursors.SizeNS,
+            ToolTip = Strings.TipSplitter,
+            Template = SplitterTemplate(),
+        };
+        splitter.MouseDoubleClick += (s, e) =>
+        {
+            _topRow.Height = GridLength.Auto;
+            _tabsRow.Height = new GridLength(1, GridUnitType.Star);
+            ClampTopRow(root);
+            PanelSettings.SetString(PanelSettings.TopHeightKey, "");
+        };
+        splitter.DragCompleted += (s, e) =>
+        {
+            ClampTopRow(root);
+            // A double-click is also a zero-length drag: its second mouse-up lands here right after the
+            // double-click handler restored Auto. Only a real move (which turns the row into a fixed
+            // size) may persist a height, or Auto would never survive a restart.
+            if (e.Canceled || _topRow.Height.IsAuto) return;
+            // Remember the boundary (the top section's height) across VS restarts.
+            PanelSettings.SetString(PanelSettings.TopHeightKey,
+                _topRow.ActualHeight.ToString("0", System.Globalization.CultureInfo.InvariantCulture));
+        };
+        if (double.TryParse(PanelSettings.GetString(PanelSettings.TopHeightKey, ""), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var savedTop) && savedTop > 0)
+            _topRow.Height = new GridLength(savedTop);
+        Grid.SetRow(splitter, 1);
+
+        root.Children.Add(topScroll);
+        root.Children.Add(splitter);
+        root.Children.Add(tabHost);
+        root.SizeChanged += (s, e) => ClampTopRow(root);
         Content = root;
 
         // 1s tick keeps the "connected for N" readout live without an event per second.
@@ -410,12 +635,14 @@ internal sealed class ClaudeToolWindowControl : UserControl
         BridgeStatus.Changed += OnChanged;
         Activity.AgentActivity.Changed += OnChanged;
         Attachments.AttachmentService.Changed += OnAttachmentsChanged;
+        BridgeStatus.SessionsChanged += OnSessionsChanged;
+        VSColorTheme.ThemeChanged += OnThemeChanged;
+        ApplyImageTheme();
         // Re-sync from current state (we may have missed events while hidden).
-        _feed.Items.Clear();
-        foreach (var entry in BridgeStatus.LogSnapshot())
-            AddFeedLine(entry.Level, entry.Text);
+        ReloadFeed(markUnread: false);
         UpdateStatus();
         RefreshAttachments();
+        if (_sessionsCard.Visibility == Visibility.Visible) RefreshSessions();
         _timer.Start();
     }
 
@@ -427,37 +654,214 @@ internal sealed class ClaudeToolWindowControl : UserControl
         BridgeStatus.Changed -= OnChanged;
         Activity.AgentActivity.Changed -= OnChanged;
         Attachments.AttachmentService.Changed -= OnAttachmentsChanged;
+        BridgeStatus.SessionsChanged -= OnSessionsChanged;
+        VSColorTheme.ThemeChanged -= OnThemeChanged;
         _timer.Stop();
     }
 
     // The WPF Dispatcher is the correct way to marshal into a WPF control from the background WS
     // thread; VSTHRD001 prefers JTF but doesn't apply to plain WPF controls.
 #pragma warning disable VSTHRD001
-    private void OnLogged(LogLevel level, string line)
-        => _ = Dispatcher.BeginInvoke(new Action(() => AddFeedLine(level, line)));
+    private void OnLogged(BridgeStatus.LogEntry entry)
+        => _ = Dispatcher.BeginInvoke(new Action(() => AddFeedLine(entry, markUnread: true)));
 
     private void OnChanged() => _ = Dispatcher.BeginInvoke(new Action(UpdateStatus));
+
+    // Only re-list while the Sessions tab is showing; selecting the tab lists afresh anyway.
+    private void OnSessionsChanged() => _ = Dispatcher.BeginInvoke(new Action(() =>
+    {
+        if (_sessionsCard.Visibility == Visibility.Visible) RefreshSessions();
+    }));
 
     private void OnAttachmentsChanged() => _ = Dispatcher.BeginInvoke(new Action(RefreshAttachments));
 #pragma warning restore VSTHRD001
 
-    private void AddFeedLine(LogLevel level, string text)
+    private void AddFeedLine(BridgeStatus.LogEntry entry, bool markUnread)
     {
+        var level = entry.Level;
         // Raw JSON frames and notification noise stay in the Output pane; keep the panel readable.
         if (level == LogLevel.Frame || level == LogLevel.Event) return;
+        if (entry.Time < _feedClearedAt) return;
+        if (BridgeStatus.FeedWarningsOnly && level != LogLevel.Warn && level != LogLevel.Error) return;
 
-        var tb = Font(new TextBlock { Text = text, FontFamily = Mono, TextWrapping = TextWrapping.NoWrap }, 0.96);
-        if (level == LogLevel.Error) tb.Foreground = ErrText;
-        else if (level == LogLevel.Warn) tb.Foreground = WarnText;
-        else tb.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        // A warning/error arriving while another tab is up marks the ACTIVITY tab.
+        if (markUnread && (level == LogLevel.Warn || level == LogLevel.Error) && _feed.Visibility != Visibility.Visible)
+            MarkActivityUnread(level == LogLevel.Error);
 
-        _feed.Items.Add(tb);
-        while (_feed.Items.Count > 400) _feed.Items.RemoveAt(0);
-        _feed.ScrollIntoView(tb);
+        // Fixed 24h stamp, culture-invariant like the log text itself (bug reports stay greppable).
+        string text = BridgeStatus.FeedTimestamps
+            ? entry.Time.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "  " + entry.Text
+            : entry.Text;
+        var p = new Paragraph(new Run(text)) { Margin = new Thickness(0) };
+        if (level == LogLevel.Error) p.Foreground = ErrText;
+        else if (level == LogLevel.Warn) p.Foreground = WarnText;
+        // Info lines inherit the RichTextBox's themed foreground.
+
+        var blocks = _feed.Document.Blocks;
+        blocks.Add(p);
+        while (blocks.Count > 400) blocks.Remove(blocks.FirstBlock);
+
+        // No-wrap needs the document as wide as its longest line (a FlowDocument has no "auto width").
+        double width = MeasureFeedLine(text);
+        if (width > _feedMaxLineWidth)
+        {
+            _feedMaxLineWidth = width;
+            if (!BridgeStatus.FeedWrap) ApplyFeedWrap();
+        }
+
+        // Follow the tail, except while the user has text selected (they're about to copy it). A bulk
+        // reload scrolls once at its end instead of once per line.
+        if (!_feedBulkLoading && _feed.Selection.IsEmpty) _feed.ScrollToEnd();
     }
+
+    private bool _feedBulkLoading;
+
+    /// <summary>Clear = hide everything logged so far; a reload (filter/timestamps toggle, re-show)
+    /// must not bring it back.</summary>
+    private void ClearFeed()
+    {
+        _feedClearedAt = DateTime.Now;
+        ResetFeed();
+    }
+
+    private DateTime _feedClearedAt = DateTime.MinValue;
+
+    private void ResetFeed()
+    {
+        _feed.Document.Blocks.Clear();
+        _feedMaxLineWidth = 0;
+        ApplyFeedWrap();
+    }
+
+    /// <summary>Re-render the feed from the log snapshot (after a display option changed, or on re-show).</summary>
+    private void ReloadFeed(bool markUnread = false)
+    {
+        ResetFeed();
+        _feedBulkLoading = true;
+        try
+        {
+            foreach (var entry in BridgeStatus.LogSnapshot())
+                AddFeedLine(entry, markUnread);
+        }
+        finally { _feedBulkLoading = false; }
+        _feed.ScrollToEnd();
+    }
+
+    private double _feedMaxLineWidth;
+
+    /// <summary>
+    /// Wrap on: the document follows the viewport width (PageWidth = auto), no horizontal scroll.
+    /// Wrap off: the document is as wide as the longest line seen, with a horizontal scrollbar - lines
+    /// stay one per row, which is easier to scan in a log.
+    /// </summary>
+    private void ApplyFeedWrap()
+    {
+        if (BridgeStatus.FeedWrap)
+        {
+            _feed.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            _feed.Document.PageWidth = double.NaN;
+        }
+        else
+        {
+            _feed.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _feed.Document.PageWidth = Math.Max(100, _feedMaxLineWidth + 24);
+        }
+    }
+
+    private double MeasureFeedLine(string text)
+    {
+        try
+        {
+            var formatted = new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface(_feed.FontFamily, _feed.FontStyle, _feed.FontWeight, _feed.FontStretch),
+                _feed.FontSize, Brushes.Black, VisualTreeHelper.GetDpi(_feed).PixelsPerDip);
+            return formatted.WidthIncludingTrailingWhitespace;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// One row per usage window:  "5-hour  [■■■■□□□□□□]  42%  resets 14:30". Runs on every status tick (1s),
+    /// which also drops a window the moment its reset time passes. ≥80% reads amber, ≥95% red.
+    /// </summary>
+    private void RenderUsage()
+    {
+        var usage = BridgeStatus.Limits;
+        if (usage == null || !usage.HasCurrent || !BridgeStatus.UsageStatusLine)
+        {
+            _usageGrid.Visibility = Visibility.Collapsed;
+            _usageSignature = null;
+            return;
+        }
+
+        // Runs every second: rebuild only when what the rows say changes (values, a window expiring, or
+        // the day rolling over, which turns "Sun 1:00" into "1:00").
+        string Sig(UsageWindow? w) => w == null || !w.IsCurrent ? "-" : $"{Math.Round(w.Percent)}@{w.ResetsAt?.ToUnixTimeSeconds()}";
+        var signature = $"{Sig(usage.FiveHour)}|{Sig(usage.SevenDay)}|{Sig(usage.Spend)}|{DateTime.Today:yyyyMMdd}";
+        if (signature == _usageSignature) return;
+        _usageSignature = signature;
+
+        _usageGrid.Children.Clear();
+        _usageGrid.RowDefinitions.Clear();
+        void Add(UsageWindow? window, string label)
+        {
+            if (window == null || !window.IsCurrent) return;
+            int row = _usageGrid.RowDefinitions.Count;
+            _usageGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Brush level = window.Percent >= 95 ? ErrText : window.Percent >= 80 ? WarnText : OpenDot;
+
+            var name = Font(new TextBlock { Text = label, Margin = new Thickness(0, 1, 8, 1), VerticalAlignment = VerticalAlignment.Center }, 1.0);
+            name.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            Grid.SetRow(name, row);
+            Grid.SetColumn(name, 0);
+            _usageGrid.Children.Add(name);
+
+            // Fill bar: two star columns in proportion used : remaining, on a translucent track.
+            var bar = new Grid { Height = 6, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            double used = Math.Max(0.0001, window.Percent), left = Math.Max(0.0001, 100 - window.Percent);
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(used, GridUnitType.Star) });
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(left, GridUnitType.Star) });
+            var track = new Border { Background = Chip, CornerRadius = new CornerRadius(3) };
+            Grid.SetColumnSpan(track, 2);
+            bar.Children.Add(track);
+            bar.Children.Add(new Border { Background = level, CornerRadius = new CornerRadius(3) });
+            Grid.SetRow(bar, row);
+            Grid.SetColumn(bar, 1);
+            _usageGrid.Children.Add(bar);
+
+            var value = Font(new TextBlock { VerticalAlignment = VerticalAlignment.Center }, 1.0);
+            value.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            var pct = new Run(Math.Round(window.Percent) + "%") { FontWeight = FontWeights.SemiBold };
+            if (window.Percent >= 80) pct.Foreground = level;
+            value.Inlines.Add(pct);
+            if (window.ResetsAt is { } resets)
+                value.Inlines.Add(new Run("  " + string.Format(Strings.UsageResetsFormat, ResetLabel(resets))) { Foreground = DimText });
+            Grid.SetRow(value, row);
+            Grid.SetColumn(value, 2);
+            _usageGrid.Children.Add(value);
+        }
+        Add(usage.FiveHour, Strings.UsageFiveHourLabel);
+        Add(usage.SevenDay, Strings.UsageSevenDayLabel);
+        Add(usage.Spend, Strings.UsageSpendLabel);
+        _usageGrid.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Local time; today = just the time, otherwise the weekday too.</summary>
+    private static string ResetLabel(DateTimeOffset resets)
+    {
+        var local = resets.ToLocalTime();
+        return local.Date == DateTime.Now.Date
+            ? local.ToString("t", UiCulture)
+            : local.ToString("ddd ", UiCulture) + local.ToString("t", UiCulture);
+    }
+
+    /// <summary>VS's display language (as the strings use), for every date/time the panel formats.</summary>
+    private static System.Globalization.CultureInfo UiCulture =>
+        Strings.Culture ?? System.Globalization.CultureInfo.CurrentUICulture;
 
     private void UpdateStatus()
     {
+        RenderUsage();
         _syncingToggles = true;
         try
         {
@@ -492,6 +896,13 @@ internal sealed class ClaudeToolWindowControl : UserControl
         }
         if (_notify.IsChecked != BridgeStatus.NotifyEnabled)
             _notify.IsChecked = BridgeStatus.NotifyEnabled;
+        if (_usageToggle.IsChecked != BridgeStatus.UsageStatusLine)
+            _usageToggle.IsChecked = BridgeStatus.UsageStatusLine;
+
+        // The toggles are tucked under the gear - flag it while anything that widens what Claude may do is on.
+        bool anySafetyToggleOn = BridgeStatus.AutoAcceptEdits || BridgeStatus.CliEditsPreApproved
+                                 || BridgeStatus.AllowDebuggerDrive || BridgeStatus.AllowScreenCapture;
+        _gearBadge.Visibility = anySafetyToggleOn ? Visibility.Visible : Visibility.Collapsed;
 
         // Status pill.
         if (BridgeStatus.Port is not int port)
@@ -714,63 +1125,696 @@ internal sealed class ClaudeToolWindowControl : UserControl
     /// the file at the change through the same Navigator the openFile tool uses. Hidden entirely when
     /// there is nothing to show, so it costs no panel height in the common case.
     /// </summary>
-    private void RefreshEdits()
+    /// <summary>List the workspace's saved sessions off-thread (files can be large; titles are cached by
+    /// size+mtime), then render on the dispatcher. Marks the session the hooks last reported as active.</summary>
+    private void RefreshSessions()
     {
-        var edits = BridgeStatus.TurnEdits;
-        _editsList.Items.Clear();
-        if (edits.Count == 0)
+        int gen = ++_sessionsLoadGen;
+        string? workspace = BridgeStatus.Workspace;
+        string? activeId = Sessions.SessionStore.IdFromTranscriptPath(Activity.TranscriptTail.CurrentPath);
+        _ = Task.Run(() =>
         {
-            _editsCard.Visibility = Visibility.Collapsed;
+            Sessions.ExternalSessions.Scan(); // so the Delete item knows about sessions other CLIs hold
+            var list = Sessions.SessionStore.List(workspace);
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (gen != _sessionsLoadGen) return;
+                RenderSessions(list, activeId);
+            }));
+        });
+    }
+
+    private System.Collections.Generic.List<Sessions.SessionInfo> _lastSessions = new();
+    private string? _lastActiveId;
+    private string? _selectedSessionId;
+    private readonly System.Collections.Generic.List<(Sessions.SessionInfo Session, Border Row)> _sessionRows = new();
+    private readonly System.Collections.Generic.Dictionary<string, string> _previewCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsSessionOpen(string id) =>
+        Sessions.SessionWindows.Check(id) != Sessions.SessionWindows.Presence.NotOpen || Sessions.ExternalSessions.IsOpen(id);
+
+    /// <summary>Render the (filtered) list, grouped Today / Yesterday / This week / Earlier.</summary>
+    private void RenderSessions(System.Collections.Generic.List<Sessions.SessionInfo> list, string? activeId)
+    {
+        _lastSessions = list;
+        _lastActiveId = activeId;
+        _sessionsList.Children.Clear();
+        _sessionRows.Clear();
+
+        // Tab badge: how many of these sessions are open right now (here or in any other CLI). One registry
+        // prune + one scan snapshot for the whole list, not a process check per session.
+        var openIds = Sessions.SessionWindows.OpenIds();
+        openIds.UnionWith(Sessions.ExternalSessions.LastScan());
+        int open = list.Count(s => openIds.Contains(s.Id));
+        _tabSessionsBadge.Text = "● " + open;
+        _tabSessionsBadge.ToolTip = string.Format(Strings.SessionsOpenCountFormat, open);
+        _tabSessionsBadge.Visibility = open > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        if (list.Count == 0)
+        {
+            _sessionsList.Children.Add(Font(new TextBlock { Text = Strings.SessionsEmpty, Opacity = 0.6, Margin = new Thickness(2, 2, 0, 2) }, 0.92));
             return;
         }
 
-        _editsCard.Visibility = Visibility.Visible;
-        _editsHeader.Text = string.Format(Strings.EditsCountFormat, edits.Count);
-
-        foreach (var edit in edits)
+        var filter = _sessionsFilter.Text.Trim();
+        var shown = filter.Length == 0
+            ? list
+            : list.Where(s => s.Title.IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) >= 0).ToList();
+        if (shown.Count == 0)
         {
-            var e = edit; // capture per row
-            string label = e.Rewritten
-                ? $"{e.FileName}  ({string.Format(Strings.EditsRewrittenFormat, e.TotalLines)})"
-                : $"{e.FileName}:{e.LineLabel}";
-
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 1, 0, 1) };
-            var link = Font(new TextBlock
-            {
-                Text = label,
-                Cursor = Cursors.Hand,
-                ToolTip = e.Rewritten
-                    ? string.Format(Strings.EditsTooltipRewritten, e.FilePath)
-                    : string.Format(Strings.EditsTooltipFormat, e.FilePath, e.StartLine + 1),
-            }, 0.96);
-            link.SetResourceReference(ForegroundProperty, VsBrushes.ControlLinkTextKey);
-            link.MouseLeftButtonUp += (s, _) =>
-            {
-                // Already on the UI thread here (a WPF input event), which is what Navigator requires.
-                bool opened = Editor.Navigator.OpenAt(
-                    e.FilePath,
-                    e.Rewritten ? (int?)null : e.StartLine,
-                    e.Rewritten ? (int?)null : e.EndLine);
-                if (!opened)
-                    Protocol.Log.Warn($"could not open {e.FilePath} - moved or deleted since the edit");
-            };
-            row.Children.Add(link);
-
-            var change = e.ChangeLabel;
-            if (change.Length > 0)
-            {
-                var badge = Font(new TextBlock
-                {
-                    Text = "  " + change,
-                    Opacity = 0.5,
-                    VerticalAlignment = VerticalAlignment.Center,
-                }, 0.88);
-                badge.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
-                row.Children.Add(badge);
-            }
-
-            _editsList.Items.Add(row);
+            _sessionsList.Children.Add(Font(new TextBlock { Text = Strings.SessionsNoMatch, Opacity = 0.6, Margin = new Thickness(2, 2, 0, 2) }, 0.92));
+            return;
         }
+
+        var today = DateTime.Today;
+        string GroupOf(DateTime when) =>
+            when.Date == today ? Strings.SessionsGroupToday
+            : when.Date == today.AddDays(-1) ? Strings.SessionsGroupYesterday
+            : when.Date > today.AddDays(-7) ? Strings.SessionsGroupThisWeek
+            : Strings.SessionsGroupEarlier;
+        string? group = null;
+        foreach (var s in shown)
+        {
+            var g = GroupOf(s.LastWriteLocal);
+            if (g != group)
+            {
+                group = g;
+                var head = Font(new TextBlock { Text = g, FontWeight = FontWeights.SemiBold, Opacity = 0.55, Margin = new Thickness(4, _sessionRows.Count == 0 ? 2 : 8, 0, 2) }, 0.83);
+                head.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+                _sessionsList.Children.Add(head);
+            }
+            var row = BuildSessionRow(s, activeId);
+            _sessionRows.Add((s, row));
+            _sessionsList.Children.Add(row);
+        }
+        if (_selectedSessionId != null && !_sessionRows.Any(r => r.Session.Id == _selectedSessionId))
+            _selectedSessionId = null;
+        PaintSessionSelection();
+    }
+
+    /// <summary>The selected row keeps a chip background; hover adds its own on top.</summary>
+    private void PaintSessionSelection()
+    {
+        foreach (var (session, row) in _sessionRows)
+            row.Background = session.Id == _selectedSessionId ? Chip : Brushes.Transparent;
+    }
+
+    private void SelectSession(Sessions.SessionInfo session)
+    {
+        _selectedSessionId = session.Id;
+        PaintSessionSelection();
+        _sessionsCard.Focus(); // so the keys (Enter / Delete / F2 / arrows) reach the pane
+    }
+
+    /// <summary>Keyboard on the SESSIONS pane: ↑/↓ select, Enter switch, Delete delete, F2 rename, F5 refresh.</summary>
+    private void OnSessionsKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.OriginalSource is TextBox)
+        {
+            // In the filter box only ↓ is ours: it hands the keyboard to the (filtered) list.
+            if (e.Key == Key.Down && _sessionRows.Count > 0)
+            {
+                SelectSession(_sessionRows[0].Session);
+                e.Handled = true;
+            }
+            return;
+        }
+        var selected = _sessionRows.FindIndex(r => r.Session.Id == _selectedSessionId);
+        switch (e.Key)
+        {
+            case Key.Down:
+            case Key.Up:
+                if (_sessionRows.Count == 0) return;
+                int next = selected < 0 ? 0 : Math.Max(0, Math.Min(_sessionRows.Count - 1, selected + (e.Key == Key.Down ? 1 : -1)));
+                SelectSession(_sessionRows[next].Session);
+                _sessionRows[next].Row.BringIntoView();
+                break;
+            case Key.Enter when selected >= 0: ResumeSession(_sessionRows[selected].Session); break;
+            case Key.Delete when selected >= 0:
+                if (!IsSessionOpen(_sessionRows[selected].Session.Id)) DeleteSession(_sessionRows[selected].Session);
+                break;
+            case Key.F2 when selected >= 0: RenameSession(_sessionRows[selected].Session); break;
+            case Key.F5: RefreshSessions(); break;
+            default: return;
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Fill <paramref name="tip"/> with "You: … / Claude: …" from the transcript's tail. Keyed by id AND the
+    /// transcript's last-write time, so a session that moved on shows its new last exchange. On a cache
+    /// miss the tail (up to 2 MB) is read on a pool thread and the open tooltip is updated in place - the
+    /// read must never stall the UI thread on hover.
+    /// </summary>
+    private void FillSessionPreview(Sessions.SessionInfo session, ToolTip tip)
+    {
+        var key = session.Id + "|" + session.LastWriteLocal.Ticks;
+        if (_previewCache.TryGetValue(key, out var cached))
+        {
+            tip.Content = cached;
+            return;
+        }
+        tip.Content = Strings.TipSessionResume;
+        string? workspace = BridgeStatus.Workspace;
+        _ = Task.Run(() =>
+        {
+            var (prompt, answer) = Sessions.SessionStore.Preview(workspace, session.Id);
+            var text = Strings.TipSessionResume;
+            if (prompt != null) text += "\n\n" + Strings.SessionPreviewYou + ": " + prompt;
+            if (answer != null) text += "\n" + "Claude: " + answer;
+#pragma warning disable VSTHRD001 // plain WPF dispatcher hop, as elsewhere in this control
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _previewCache[key] = text;
+                tip.Content = text;
+            }));
+#pragma warning restore VSTHRD001
+        });
+    }
+
+    private Border BuildSessionRow(Sessions.SessionInfo s, string? activeId)
+    {
+        {
+            var session = s; // capture per row
+            bool active = string.Equals(session.Id, activeId, StringComparison.OrdinalIgnoreCase);
+            var title = Font(new TextBlock
+            {
+                Text = (active ? "● " : "") + session.Title,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
+            }, 0.96);
+            var when = Font(new TextBlock
+            {
+                Text = session.LastWriteLocal.ToString("g", UiCulture) + (active ? "  ·  " + Strings.SessionActive : ""),
+                Opacity = 0.55,
+            }, 0.83);
+            var stack = new StackPanel();
+            stack.Children.Add(title);
+            stack.Children.Add(when);
+            var tip = new ToolTip { Content = Strings.TipSessionResume };
+            var row = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(4, 2, 4, 2),
+                Cursor = Cursors.Hand,
+                ToolTip = tip,
+                Child = stack,
+            };
+            // The tooltip grows a preview of the conversation's last exchange, read in the background on hover.
+            row.ToolTipOpening += (a, b) => FillSessionPreview(session, tip);
+            row.MouseEnter += (a, b) => row.Background = ChipHover;
+            row.MouseLeave += (a, b) => row.Background = session.Id == _selectedSessionId ? Chip : Brushes.Transparent;
+            row.MouseLeftButtonDown += (a, b) =>
+            {
+                SelectSession(session);
+                if (b.ClickCount >= 2) ResumeSession(session);
+            };
+            row.MouseRightButtonDown += (a, b) => SelectSession(session);
+
+            // Right-click menu. Switch is also the double-click; Rename writes the same record the CLI's
+            // /rename and the VS Code extension do, so the new name shows up everywhere.
+            var menu = MakeThemedMenu();
+            var cont = new MenuItem { Header = Strings.SessionMenuSwitch };
+            cont.Click += (a, b) => ResumeSession(session);
+            menu.Items.Add(cont);
+
+            var rename = new MenuItem { Header = Strings.SessionMenuRename };
+            rename.Click += (a, b) => RenameSession(session);
+            menu.Items.Add(rename);
+
+            var delete = new MenuItem { Header = Strings.SessionMenuDelete };
+            delete.Click += (a, b) => DeleteSession(session);
+            ToolTipService.SetShowOnDisabled(delete, true);
+            menu.Items.Add(delete);
+            // An open session can't be deleted (its CLI would recreate the transcript): grey the item out,
+            // evaluated each time the menu opens since sessions open and close while the list sits there.
+            // "Open" = known to our window registry OR held by any running CLI (VS Code, another terminal):
+            // deleting a session another client holds doesn't stick - it re-writes a stub on exit.
+            void ApplyOpenState()
+            {
+                bool open = IsSessionOpen(session.Id);
+                delete.IsEnabled = !open;
+                delete.ToolTip = open ? Strings.SessionDeleteOpen : null;
+            }
+            menu.Opened += (a, b) =>
+            {
+                ApplyOpenState(); // instant, from the last process scan
+                _ = Task.Run(() =>
+                {
+                    Sessions.ExternalSessions.Scan(); // then refresh it while the menu is up
+                    _ = Dispatcher.BeginInvoke(new Action(() => { if (menu.IsOpen) ApplyOpenState(); }));
+                });
+            };
+            row.ContextMenu = menu;
+
+            return row;
+        }
+    }
+
+    private void RenameSession(Sessions.SessionInfo session)
+    {
+        var name = RenameDialog.Prompt(session.Title);
+        if (name == null) return;
+        string? workspace = BridgeStatus.Workspace;
+        _ = Task.Run(() =>
+        {
+            Sessions.SessionStore.Rename(workspace, session.Id, name);
+            BridgeStatus.RaiseSessionsChanged(); // re-lists here and retitles the session's terminal tab
+        });
+    }
+
+    private void DeleteSession(Sessions.SessionInfo session)
+    {
+        // The menu item is disabled for open sessions; re-check in case it opened while the menu was up.
+        if (Sessions.SessionWindows.Check(session.Id) != Sessions.SessionWindows.Presence.NotOpen) return;
+
+        int answer = VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider,
+            string.Format(Strings.SessionDeleteConfirmFormat, session.Title), Strings.SessionDeleteTitle,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGICON.OLEMSGICON_QUERY,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGBUTTON.OLEMSGBUTTON_OKCANCEL,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND);
+        if (answer != 1 /* IDOK */) return;
+
+        _ = Task.Run(() =>
+        {
+            // Last check right before deleting: a CLI may have resumed it while the dialog was up.
+            if (Sessions.ExternalSessions.Scan().Contains(session.Id))
+                Protocol.Log.Warn($"sessions: not deleting {session.Id} - a running claude process has it open");
+            else
+                Sessions.SessionStore.Delete(session.Id);
+            _ = Dispatcher.BeginInvoke(new Action(RefreshSessions));
+        });
+    }
+
+    /// <summary>
+    /// A context menu skinned with VS's command-bar theme brushes (the stock WPF menu is light Aero chrome
+    /// in a dark IDE). Templates are built in code to match the rest of the panel; the items' template
+    /// lives in the menu's own resources so every MenuItem added later picks it up.
+    /// </summary>
+    private static ContextMenu MakeThemedMenu()
+    {
+
+        // Menu frame
+        var frame = new System.Windows.FrameworkElementFactory(typeof(Border));
+        frame.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarMenuBackgroundGradientBrushKey);
+        frame.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.CommandBarMenuBorderBrushKey);
+        frame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        frame.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+        frame.SetValue(Border.PaddingProperty, new Thickness(3));
+        var items = new System.Windows.FrameworkElementFactory(typeof(StackPanel));
+        items.SetValue(Panel.IsItemsHostProperty, true);
+        frame.AppendChild(items);
+        var menuStyle = new Style(typeof(ContextMenu));
+        menuStyle.Setters.Add(new Setter(TemplateProperty, new ControlTemplate(typeof(ContextMenu)) { VisualTree = frame }));
+
+        // Menu item
+        var itemBorder = new System.Windows.FrameworkElementFactory(typeof(Border)) { Name = "bd" };
+        itemBorder.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        itemBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        itemBorder.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+        itemBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        itemBorder.SetValue(Border.PaddingProperty, new Thickness(4, 5, 24, 5));
+        // A fixed check column (blank unless IsChecked), so checkable items show their state and every
+        // item's text lines up whether or not it is checkable.
+        var row = new System.Windows.FrameworkElementFactory(typeof(StackPanel)) { Name = "txt" };
+        row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+        row.SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+        var check = new System.Windows.FrameworkElementFactory(typeof(TextBlock)) { Name = "chk" };
+        check.SetValue(TextBlock.TextProperty, "✓");
+        check.SetValue(WidthProperty, 16.0);
+        check.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
+        check.SetValue(VisibilityProperty, Visibility.Hidden);
+        row.AppendChild(check);
+        var content = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.ContentSourceProperty, "Header");
+        content.SetValue(MarginProperty, new Thickness(4, 0, 0, 0));
+        row.AppendChild(content);
+        itemBorder.AppendChild(row);
+        var itemTemplate = new ControlTemplate(typeof(MenuItem)) { VisualTree = itemBorder };
+        var isChecked = new Trigger { Property = MenuItem.IsCheckedProperty, Value = true };
+        isChecked.Setters.Add(new Setter(VisibilityProperty, Visibility.Visible, "chk"));
+        itemTemplate.Triggers.Add(isChecked);
+        var hot = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
+        hot.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverBrushKey), "bd"));
+        hot.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverBorderBrushKey), "bd"));
+        hot.Setters.Add(new Setter(TextElement.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverTextBrushKey), "txt"));
+        itemTemplate.Triggers.Add(hot);
+        // Added after "hot" so it wins: a disabled item is dimmed and never highlights.
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(OpacityProperty, 0.45, "txt"));
+        disabled.Setters.Add(new Setter(Border.BackgroundProperty, Brushes.Transparent, "bd"));
+        disabled.Setters.Add(new Setter(Border.BorderBrushProperty, Brushes.Transparent, "bd"));
+        itemTemplate.Triggers.Add(disabled);
+        var itemStyle = new Style(typeof(MenuItem));
+        itemStyle.Setters.Add(new Setter(TemplateProperty, itemTemplate));
+        itemStyle.Setters.Add(new Setter(FocusVisualStyleProperty, null));
+
+        var menu = new ContextMenu { Style = menuStyle };
+        menu.Resources.Add(typeof(MenuItem), itemStyle);
+        return menu;
+    }
+
+    private static void ResumeSession(Sessions.SessionInfo session)
+    {
+        // The id becomes a command-line argument: accept only the CLI's own id alphabet.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(session.Id, "^[A-Za-z0-9-]+$")) return;
+        _ = BridgeStatus.SwitchSessionAction?.Invoke(session.Id);
+    }
+
+    private void SelectTab(PanelTab tab)
+    {
+        _currentTab = tab;
+        _feed.Visibility = tab == PanelTab.Activity ? Visibility.Visible : Visibility.Collapsed;
+        _editsCard.Visibility = tab == PanelTab.Edits ? Visibility.Visible : Visibility.Collapsed;
+        _sessionsCard.Visibility = tab == PanelTab.Sessions ? Visibility.Visible : Visibility.Collapsed;
+        SetTabSelected(_tabActivity, tab == PanelTab.Activity);
+        SetTabSelected(_tabEdits, tab == PanelTab.Edits);
+        SetTabSelected(_tabSessions, tab == PanelTab.Sessions);
+        if (tab == PanelTab.Activity) _tabActivityBadge.Visibility = Visibility.Collapsed; // read
+        if (tab == PanelTab.Sessions && _wired) RefreshSessions();
+        if (_layoutRestored) PanelSettings.SetString(PanelSettings.SelectedTabKey, tab.ToString());
+    }
+
+    private PanelTab _currentTab = PanelTab.Sessions;
+    private bool _layoutRestored;
+    private readonly TextBlock _tabActivityBadge;
+    private readonly TextBlock _tabEditsBadge;
+    private readonly TextBlock _tabSessionsBadge;
+    private static readonly Brush OpenDot = Freeze(Color.FromRgb(0x3F, 0xB9, 0x50));
+
+    /// <summary>Tab order as shown, for Ctrl+Tab / Ctrl+PageDown cycling.</summary>
+    private static readonly PanelTab[] TabOrder = { PanelTab.Sessions, PanelTab.Edits, PanelTab.Activity };
+
+    private void CycleTab(int direction)
+    {
+        int i = Array.IndexOf(TabOrder, _currentTab);
+        SelectTab(TabOrder[(i + direction + TabOrder.Length) % TabOrder.Length]);
+    }
+
+    /// <summary>A warning or error was logged while ACTIVITY wasn't showing: dot the tab (red beats amber).</summary>
+    private void MarkActivityUnread(bool error)
+    {
+        if (_tabActivityBadge.Visibility != Visibility.Visible || error)
+            _tabActivityBadge.Foreground = error ? ErrText : WarnText;
+        _tabActivityBadge.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Cap the top section so the tab area keeps at least <see cref="TabsMinHeight"/>: the top row is
+    /// Auto (sized to its content) until the user drags the splitter, and an Auto row ignores the star
+    /// row's MinHeight - without this cap, a tall top section pushed the tabs off the panel.
+    /// </summary>
+    private void ClampTopRow(Grid root)
+    {
+        double available = root.ActualHeight - TabsMinHeight - SplitterHeight;
+        _topRow.MaxHeight = Math.Max(48, available);
+    }
+
+    /// <summary>A thin divider line centred in the splitter's grab area.</summary>
+    private static ControlTemplate SplitterTemplate()
+    {
+        var grip = new System.Windows.FrameworkElementFactory(typeof(Border));
+        grip.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        var line = new System.Windows.FrameworkElementFactory(typeof(Border));
+        line.SetValue(HeightProperty, 1.0);
+        line.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+        line.SetValue(Border.BackgroundProperty, Divider);
+        grip.AppendChild(line);
+        return new ControlTemplate(typeof(GridSplitter)) { VisualTree = grip };
+    }
+
+    private static void SetTabSelected(Border tab, bool selected)
+    {
+        tab.BorderThickness = new Thickness(0, 0, 0, 2);
+        tab.Opacity = selected ? 1.0 : 0.6;
+        if (selected) tab.SetResourceReference(Border.BorderBrushProperty, VsBrushes.ControlLinkTextKey);
+        else tab.BorderBrush = Brushes.Transparent;
+    }
+
+    /// <summary>A tab header: the upper-cased label plus a small badge (a count or a dot), hidden when empty.</summary>
+    private static Border MakeTabHeader(string text, Action onClick, out TextBlock badge)
+    {
+        var label = Font(new TextBlock { Text = text.ToUpperInvariant(), FontWeight = FontWeights.SemiBold }, 0.96);
+        label.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        badge = Font(new TextBlock { Margin = new Thickness(5, 0, 0, 0), Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center }, 0.85);
+        badge.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var face = new StackPanel { Orientation = Orientation.Horizontal };
+        face.Children.Add(label);
+        face.Children.Add(badge);
+        var tab = new Border
+        {
+            Background = Brushes.Transparent,
+            Padding = new Thickness(8, 3, 8, 3),
+            Margin = new Thickness(0, 0, 4, 0),
+            Cursor = Cursors.Hand,
+            Child = face,
+        };
+        tab.MouseLeftButtonUp += (s, e) => onClick();
+        return tab;
+    }
+
+    private Button _editsTurnButton = null!;
+    /// <summary>The past turn being shown, or null for the current one. A reference, not an index: a new
+    /// turn is inserted at the front of the history and would shift every index.</summary>
+    private BridgeStatus.EditTurn? _editsTurn;
+    private readonly System.Collections.Generic.HashSet<string> _collapsedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private bool _editsDirty;
+
+    private void RefreshEdits()
+    {
+        var current = BridgeStatus.TurnEdits;
+        var history = BridgeStatus.EditHistory;
+        if (_editsTurn != null && !history.Contains(_editsTurn)) _editsTurn = null; // aged out of the history
+
+        // The tab badge always counts the CURRENT turn's changes, whatever turn the tab is showing.
+        _tabEditsBadge.Text = current.Count.ToString();
+        _tabEditsBadge.Visibility = current.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        System.Collections.Generic.IReadOnlyList<Edits.EditEntry> edits = _editsTurn == null ? current : _editsTurn.Rows;
+
+        // The turn picker is updated BEFORE the unchanged-list early return below: with no edits yet the
+        // list never "changes", and the button used to stay a blank square with only its tooltip.
+        // It only appears once there is an earlier turn to pick.
+        _editsTurnButton.Content = (_editsTurn == null
+            ? string.Format(Strings.EditsTurnCurrentFormat, current.Count)
+            : TurnLabel(_editsTurn)) + "  ▾";
+        _editsTurnButton.Visibility = history.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Runs on every status tick: rebuild only when the list really changed, so the tab's scroll
+        // position (and a row under the mouse) survive the 1s refresh.
+        if (!_editsDirty && edits.Count == _renderedEdits.Length
+            && edits.Select((e, i) => ReferenceEquals(e, _renderedEdits[i])).All(same => same))
+            return;
+        _editsDirty = false;
+        _renderedEdits = edits.ToArray();
+
+        _editsList.Items.Clear();
+        _editsEmpty.Visibility = edits.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (edits.Count == 0) return;
+
+        // A folder tree by path relative to the workspace; every folder and file collapsible.
+        var tree = Edits.EditTree.Build(edits, BridgeStatus.Workspace);
+        RenderEditFolder(tree, depth: 0);
+    }
+
+    private const double TreeIndent = 14;
+
+    /// <summary>Folders first (alphabetical), then files; the root itself has no row.</summary>
+    private void RenderEditFolder(Edits.EditTree.Folder folder, int depth)
+    {
+        foreach (var child in folder.Folders)
+        {
+            bool collapsed = _collapsedFiles.Contains(FolderKey(child.FullPath));
+            _editsList.Items.Add(BuildEditFolderRow(child, collapsed, depth));
+            if (!collapsed) RenderEditFolder(child, depth + 1);
+        }
+        foreach (var rows in folder.Files)
+        {
+            bool collapsed = _collapsedFiles.Contains(rows[0].FilePath);
+            _editsList.Items.Add(BuildEditFileRow(rows, collapsed, depth));
+            if (collapsed) continue;
+            foreach (var e in rows)
+                _editsList.Items.Add(BuildEditHunkRow(e, depth + 1));
+        }
+    }
+
+    private static string FolderKey(string path) => "dir:" + path;
+
+    /// <summary>A folder node: ▾/▸ + folder icon + its (compacted, shortened) path + the subtree's +A -R.</summary>
+    private UIElement BuildEditFolderRow(Edits.EditTree.Folder folder, bool collapsed, int depth)
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(depth * TreeIndent, 4, 0, 1),
+            Cursor = Cursors.Hand,
+            Background = Brushes.Transparent,
+            ToolTip = folder.FullPath,
+        };
+        var chevron = Font(new TextBlock { Text = collapsed ? "▸" : "▾", Width = 14, Opacity = 0.7 }, 0.96);
+        chevron.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var icon = new CrispImage
+        {
+            Moniker = collapsed ? KnownMonikers.FolderClosed : KnownMonikers.FolderOpened,
+            Width = 14,
+            Height = 14,
+            Margin = new Thickness(0, 0, 5, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var name = Font(new TextBlock { Text = Edits.EditTree.Shorten(folder.Name, 40) }, 0.96);
+        name.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var all = folder.AllRows().ToList();
+        var summary = Font(new TextBlock
+        {
+            Text = "  " + new Edits.EditEntry { Added = all.Sum(r => r.Added), Removed = all.Sum(r => r.Removed) }.ChangeLabel,
+            Opacity = 0.5,
+            VerticalAlignment = VerticalAlignment.Center,
+        }, 0.88);
+        summary.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        row.Children.Add(chevron);
+        row.Children.Add(icon);
+        row.Children.Add(name);
+        row.Children.Add(summary);
+        row.MouseLeftButtonUp += (s, e) =>
+        {
+            var key = FolderKey(folder.FullPath);
+            if (!_collapsedFiles.Remove(key)) _collapsedFiles.Add(key);
+            _editsDirty = true;
+            RefreshEdits();
+        };
+        return row;
+    }
+
+    private static string TurnLabel(BridgeStatus.EditTurn turn)
+    {
+        var prompt = (turn.Prompt ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (prompt.Length > 40) prompt = prompt.Substring(0, 39) + "…";
+        return string.Format(Strings.EditsTurnPastFormat, turn.Started.ToString("t", UiCulture), prompt, turn.Rows.Length);
+    }
+
+    private void ShowTurnPicker()
+    {
+        var history = BridgeStatus.EditHistory;
+        var menu = MakeThemedMenu();
+        var currentItem = new MenuItem
+        {
+            Header = string.Format(Strings.EditsTurnCurrentFormat, BridgeStatus.TurnEdits.Count),
+            IsCheckable = true,
+            IsChecked = _editsTurn == null,
+        };
+        currentItem.Click += (s, e) => { _editsTurn = null; _editsDirty = true; RefreshEdits(); };
+        menu.Items.Add(currentItem);
+        foreach (var turn in history)
+        {
+            var item = new MenuItem { Header = TurnLabel(turn), IsCheckable = true, IsChecked = ReferenceEquals(_editsTurn, turn) };
+            item.Click += (s, e) => { _editsTurn = turn; _editsDirty = true; RefreshEdits(); };
+            menu.Items.Add(item);
+        }
+        menu.PlacementTarget = _editsTurnButton;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    /// <summary>The file header of an EDITS group: ▾/▸ toggles the group; the menu opens the file or shows
+    /// the file's whole change in this turn (first edit's "before" against the last edit's "after").</summary>
+    private UIElement BuildEditFileRow(System.Collections.Generic.List<Edits.EditEntry> rows, bool collapsed, int depth)
+    {
+        var first = rows[0];
+        int added = rows.Sum(r => r.Added), removed = rows.Sum(r => r.Removed);
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(depth * TreeIndent, 4, 0, 1), Cursor = Cursors.Hand, Background = Brushes.Transparent };
+        var chevron = Font(new TextBlock { Text = collapsed ? "▸" : "▾", Width = 14, Opacity = 0.7 }, 0.96);
+        chevron.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var name = Font(new TextBlock { Text = first.FileName, FontWeight = FontWeights.SemiBold, ToolTip = first.FilePath }, 0.96);
+        name.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var summary = Font(new TextBlock
+        {
+            Text = "  " + new Edits.EditEntry { Added = added, Removed = removed }.ChangeLabel,
+            Opacity = 0.5,
+            VerticalAlignment = VerticalAlignment.Center,
+        }, 0.88);
+        summary.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        row.Children.Add(chevron);
+        row.Children.Add(name);
+        row.Children.Add(summary);
+        row.MouseLeftButtonUp += (s, e) =>
+        {
+            if (!_collapsedFiles.Remove(first.FilePath)) _collapsedFiles.Add(first.FilePath);
+            _editsDirty = true;
+            RefreshEdits();
+        };
+
+        var menu = MakeThemedMenu();
+        var open = new MenuItem { Header = Strings.EditsMenuOpen };
+        open.Click += (s, e) => OpenEdit(first, wholeFile: true);
+        menu.Items.Add(open);
+        var diff = new MenuItem { Header = Strings.EditsMenuShowDiff, IsEnabled = rows.All(r => r.Snapshot != null) };
+        diff.Click += (s, e) =>
+        {
+            // Whole-turn change of this file: before the first edit -> after the last one.
+            var combined = new Edits.EditEntry
+            {
+                FilePath = first.FilePath,
+                FileName = first.FileName,
+                Snapshot = new Edits.EditSnapshot(rows[0].Snapshot!.Before, rows[rows.Count - 1].Snapshot!.After),
+            };
+            Edits.EditDiffViewer.Show(combined);
+        };
+        menu.Items.Add(diff);
+        row.ContextMenu = menu;
+        return row;
+    }
+
+    /// <summary>One changed region: click opens the file there; the menu also shows this edit's diff.</summary>
+    private UIElement BuildEditHunkRow(Edits.EditEntry e, int depth)
+    {
+        string label = e.Rewritten
+            ? string.Format(Strings.EditsRewrittenFormat, e.TotalLines)
+            : string.Format(Strings.EditsLineFormat, e.LineLabel);
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(depth * TreeIndent + 14, 1, 0, 1) };
+        var link = Font(new TextBlock
+        {
+            Text = label,
+            Cursor = Cursors.Hand,
+            ToolTip = e.Rewritten
+                ? string.Format(Strings.EditsTooltipRewritten, e.FilePath)
+                : string.Format(Strings.EditsTooltipFormat, e.FilePath, e.StartLine + 1),
+        }, 0.96);
+        link.SetResourceReference(ForegroundProperty, VsBrushes.ControlLinkTextKey);
+        link.MouseLeftButtonUp += (s, _) => OpenEdit(e, wholeFile: false);
+        row.Children.Add(link);
+
+        var change = e.ChangeLabel;
+        if (change.Length > 0)
+        {
+            var badge = Font(new TextBlock
+            {
+                Text = "  " + change,
+                Opacity = 0.5,
+                VerticalAlignment = VerticalAlignment.Center,
+            }, 0.88);
+            badge.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+            row.Children.Add(badge);
+        }
+
+        var menu = MakeThemedMenu();
+        var open = new MenuItem { Header = Strings.EditsMenuOpen };
+        open.Click += (s, args) => OpenEdit(e, wholeFile: false);
+        menu.Items.Add(open);
+        var diff = new MenuItem { Header = Strings.EditsMenuShowDiff, IsEnabled = e.Snapshot != null };
+        diff.Click += (s, args) => Edits.EditDiffViewer.Show(e);
+        menu.Items.Add(diff);
+        row.ContextMenu = menu;
+        return row;
+    }
+
+    private static void OpenEdit(Edits.EditEntry e, bool wholeFile)
+    {
+        // Already on the UI thread here (a WPF input event), which is what Navigator requires.
+        bool rangeless = wholeFile || e.Rewritten;
+        bool opened = Editor.Navigator.OpenAt(e.FilePath, rangeless ? (int?)null : e.StartLine, rangeless ? (int?)null : e.EndLine);
+        if (!opened)
+            Protocol.Log.Warn($"could not open {e.FilePath} - moved or deleted since the edit");
     }
 
     /// <summary>
@@ -995,23 +2039,115 @@ internal sealed class ClaudeToolWindowControl : UserControl
         return style;
     }
 
-    /// <summary>A flat, theme-aware button: a rounded chip that lightens on hover, themed text.</summary>
+    /// <summary>
+    /// A VS-themed button: the shell's own button brushes (face / border / hover / pressed / disabled,
+    /// so it follows every theme incl. high contrast), a 1px border, and real hover/pressed/focus states.
+    /// The state brushes are set by template triggers on the named border - NOT on the button itself:
+    /// a local Background on the Button outranks any trigger, which is why the old chip never reacted.
+    /// </summary>
+    /// <summary>Persist the usage toggle and re-apply the workspace's statusLine (off the UI thread - file IO).</summary>
+    private void ApplyUsageToggle(bool on)
+    {
+        if (BridgeStatus.UsageStatusLine == on) return; // a programmatic sync from UpdateStatus
+        BridgeStatus.SetUsageStatusLine(on);
+        var workspace = BridgeStatus.Workspace;
+        if (!string.IsNullOrEmpty(workspace))
+            _ = Task.Run(() => Hooks.PermissionHookInstaller.EnsureInstalled(workspace!, on));
+    }
+
+    /// <summary>A toolbar button showing a VS image instead of text; the label becomes its tooltip.</summary>
+    private static Button MakeIconButton(ImageMoniker moniker, string tooltip, Action onClick)
+    {
+        var b = MakeButton("", onClick);
+        b.Content = new CrispImage { Moniker = moniker, Width = 16, Height = 16 };
+        b.Padding = new Thickness(7, 4, 7, 4);
+        b.ToolTip = tooltip;
+        AutomationProperties.SetName(b, tooltip);
+        return b;
+    }
+
+    private Ellipse _gearBadge = null!;
+
+    /// <summary>
+    /// The gear: opens a themed popup holding <paramref name="content"/> (the toggles). The popup lives in
+    /// the button's subtree so it inherits the panel's font scale and resources.
+    /// </summary>
+    private Button MakeSettingsButton(Panel content)
+    {
+        var face = new Grid();
+        face.Children.Add(new CrispImage { Moniker = KnownMonikers.Settings, Width = 16, Height = 16 });
+        _gearBadge = new Ellipse
+        {
+            Width = 7,
+            Height = 7,
+            Fill = WarnText,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -3, -5, 0),
+            Visibility = Visibility.Collapsed,
+            IsHitTestVisible = false,
+        };
+        face.Children.Add(_gearBadge);
+
+        var frame = new Border { BorderThickness = new Thickness(1), Padding = new Thickness(12, 6, 12, 6), Child = content };
+        frame.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarMenuBackgroundGradientBrushKey);
+        frame.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.CommandBarMenuBorderBrushKey);
+        var popup = new System.Windows.Controls.Primitives.Popup
+        {
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            Child = frame,
+        };
+        face.Children.Add(popup);
+
+        // StaysOpen=false closes the popup on the mouse-down that is also this button's click - without
+        // the guard that click would immediately reopen it, and the gear could never close its own popup.
+        DateTime closedAt = DateTime.MinValue;
+        popup.Closed += (s, e) => closedAt = DateTime.UtcNow;
+        Button? button = null;
+        button = MakeButton("", () =>
+        {
+            if (DateTime.UtcNow - closedAt < TimeSpan.FromMilliseconds(250)) return;
+            popup.PlacementTarget = button;
+            popup.IsOpen = true;
+        });
+        button.Content = face;
+        button.Padding = new Thickness(7, 4, 7, 4);
+        button.ToolTip = Strings.TipSettings;
+        AutomationProperties.SetName(button, Strings.TipSettings);
+        return button;
+    }
+
+    /// <summary>CrispImage picks light/dark variants from the background it sits on - tell it which.</summary>
+    private void ApplyImageTheme()
+    {
+        var c = VSColorTheme.GetThemedColor(EnvironmentColors.ToolWindowBackgroundColorKey);
+        ImageThemingUtilities.SetImageBackgroundColor(this, Color.FromArgb(c.A, c.R, c.G, c.B));
+    }
+
+    private void OnThemeChanged(ThemeChangedEventArgs e) => ApplyImageTheme();
+
     private static Button MakeButton(string text, Action onClick)
     {
         var b = Font(new Button
         {
             Content = text,
             Margin = new Thickness(0, 0, 6, 0),
-            Padding = new Thickness(10, 3, 10, 3),
+            Padding = new Thickness(12, 3, 12, 3),
+            MinHeight = 24,
             Cursor = Cursors.Hand,
-            Background = Chip,
-            BorderThickness = new Thickness(0),
+            BorderThickness = new Thickness(1),
+            FocusVisualStyle = null,
         }, 1.0);
-        b.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        b.SetResourceReference(BackgroundProperty, CommonControlsColors.ButtonBrushKey);
+        b.SetResourceReference(BorderBrushProperty, CommonControlsColors.ButtonBorderBrushKey);
+        b.SetResourceReference(ForegroundProperty, CommonControlsColors.ButtonTextBrushKey);
 
-        var border = new System.Windows.FrameworkElementFactory(typeof(Border));
-        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        var border = new System.Windows.FrameworkElementFactory(typeof(Border)) { Name = "bd" };
         border.SetBinding(Border.BackgroundProperty, new Binding("Background") { RelativeSource = RelativeSource.TemplatedParent });
+        border.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") { RelativeSource = RelativeSource.TemplatedParent });
+        border.SetBinding(Border.BorderThicknessProperty, new Binding("BorderThickness") { RelativeSource = RelativeSource.TemplatedParent });
         border.SetBinding(Border.PaddingProperty, new Binding("Padding") { RelativeSource = RelativeSource.TemplatedParent });
         var cp = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
         cp.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
@@ -1019,13 +2155,25 @@ internal sealed class ClaudeToolWindowControl : UserControl
         border.AppendChild(cp);
 
         var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(BackgroundProperty, ChipHover));
-        template.Triggers.Add(hover);
+        // Later triggers win over earlier ones: hover < keyboard focus < pressed < disabled.
+        template.Triggers.Add(StateTrigger(IsMouseOverProperty, CommonControlsColors.ButtonHoverBrushKey, CommonControlsColors.ButtonBorderHoverBrushKey));
+        template.Triggers.Add(StateTrigger(IsKeyboardFocusedProperty, null, CommonControlsColors.ButtonBorderFocusedBrushKey));
+        template.Triggers.Add(StateTrigger(System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, CommonControlsColors.ButtonPressedBrushKey, CommonControlsColors.ButtonBorderPressedBrushKey));
+        template.Triggers.Add(StateTrigger(IsEnabledProperty, CommonControlsColors.ButtonDisabledBrushKey, CommonControlsColors.ButtonBorderDisabledBrushKey, value: false));
         b.Template = template;
 
         b.Click += (s, e) => { try { onClick(); } catch { } };
         return b;
+    }
+
+    private static Trigger StateTrigger(DependencyProperty prop, object? backgroundKey, object? borderKey, bool value = true)
+    {
+        var t = new Trigger { Property = prop, Value = value };
+        if (backgroundKey != null)
+            t.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(backgroundKey), "bd"));
+        if (borderKey != null)
+            t.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(borderKey), "bd"));
+        return t;
     }
 
     private static Brush Freeze(Color c)

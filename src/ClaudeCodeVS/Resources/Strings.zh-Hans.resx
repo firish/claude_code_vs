@@ -39,6 +39,152 @@
   <data name="BtnRelaunch" xml:space="preserve">
     <value>重新启动 Claude Code</value>
   </data>
+  <data name="SessionsHeader" xml:space="preserve">
+    <value>会话</value>
+  </data>
+  <data name="BtnSessionsRefresh" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="BtnSessionsNew" xml:space="preserve">
+    <value>新建</value>
+  </data>
+  <data name="TipSessionResume" xml:space="preserve">
+    <value>双击可恢复此会话</value>
+  </data>
+  <data name="SessionMenuSwitch" xml:space="preserve">
+    <value>切换到会话</value>
+  </data>
+  <data name="SessionMenuRename" xml:space="preserve">
+    <value>重命名…</value>
+  </data>
+  <data name="FeedMenuCopy" xml:space="preserve">
+    <value>复制</value>
+  </data>
+  <data name="FeedMenuSelectAll" xml:space="preserve">
+    <value>全选</value>
+  </data>
+  <data name="FeedMenuWrap" xml:space="preserve">
+    <value>自动换行</value>
+  </data>
+  <data name="SessionMenuDelete" xml:space="preserve">
+    <value>删除…</value>
+  </data>
+  <data name="SessionDeleteTitle" xml:space="preserve">
+    <value>删除会话</value>
+  </data>
+  <data name="SessionDeleteConfirmFormat" xml:space="preserve">
+    <value>要删除会话“{0}”吗？
+
+其记录、文件历史和其他会话数据将被永久删除，且无法撤销。</value>
+  </data>
+  <data name="SessionDeleteOpen" xml:space="preserve">
+    <value>此会话正在终端中打开。请先在那里退出 Claude Code，然后再删除。</value>
+  </data>
+  <data name="RenameTitle" xml:space="preserve">
+    <value>重命名会话</value>
+  </data>
+  <data name="RenamePrompt" xml:space="preserve">
+    <value>此会话的新名称：</value>
+  </data>
+  <data name="BtnRenameOk" xml:space="preserve">
+    <value>重命名</value>
+  </data>
+  <data name="TabEdits" xml:space="preserve">
+    <value>编辑</value>
+  </data>
+  <data name="EditsEmpty" xml:space="preserve">
+    <value>本轮还没有编辑。</value>
+  </data>
+  <data name="TipSplitter" xml:space="preserve">
+    <value>拖动以调整大小，双击以自动调整大小。</value>
+  </data>
+  <data name="ToggleUsage" xml:space="preserve">
+    <value>显示订阅用量</value>
+  </data>
+  <data name="TipUsageToggle" xml:space="preserve">
+    <value>安装一个 Claude Code 状态栏，把你的订阅用量（5 小时和每周限额）转发到此面板。你自己的状态栏会继续工作。每次状态栏刷新都会启动一次 PowerShell；关闭后会移除它并恢复你自己的状态栏。对新会话生效。</value>
+  </data>
+  <data name="TipSettings" xml:space="preserve">
+    <value>设置：自动接受、调试器控制、屏幕截图、通知</value>
+  </data>
+  <data name="UsageFiveHourLabel" xml:space="preserve">
+    <value>5 小时</value>
+  </data>
+  <data name="UsageSevenDayLabel" xml:space="preserve">
+    <value>每周</value>
+  </data>
+  <data name="UsageSpendLabel" xml:space="preserve">
+    <value>支出</value>
+  </data>
+  <data name="FeedMenuTimestamps" xml:space="preserve">
+    <value>显示时间戳</value>
+  </data>
+  <data name="FeedMenuWarningsOnly" xml:space="preserve">
+    <value>仅显示警告和错误</value>
+  </data>
+  <data name="TipEditsTurn" xml:space="preserve">
+    <value>选择要显示哪一轮的编辑</value>
+  </data>
+  <data name="EditsTurnCurrentFormat" xml:space="preserve">
+    <value>当前轮次（{0}）</value>
+  </data>
+  <data name="EditsTurnPastFormat" xml:space="preserve">
+    <value>{0} · {1}（{2}）</value>
+  </data>
+  <data name="EditsMenuOpen" xml:space="preserve">
+    <value>打开</value>
+  </data>
+  <data name="EditsMenuShowDiff" xml:space="preserve">
+    <value>显示差异</value>
+  </data>
+  <data name="EditsLineFormat" xml:space="preserve">
+    <value>第 {0} 行</value>
+  </data>
+  <data name="EditsDiffCaptionFormat" xml:space="preserve">
+    <value>Claude Code 编辑：{0}</value>
+  </data>
+  <data name="EditsDiffBeforeFormat" xml:space="preserve">
+    <value>{0}（之前）</value>
+  </data>
+  <data name="EditsDiffAfterFormat" xml:space="preserve">
+    <value>{0}（之后）</value>
+  </data>
+  <data name="SessionsOpenCountFormat" xml:space="preserve">
+    <value>{0} 个已打开</value>
+  </data>
+  <data name="SessionsNoMatch" xml:space="preserve">
+    <value>没有与筛选条件匹配的会话。</value>
+  </data>
+  <data name="SessionsFilterHint" xml:space="preserve">
+    <value>筛选</value>
+  </data>
+  <data name="SessionsGroupToday" xml:space="preserve">
+    <value>今天</value>
+  </data>
+  <data name="SessionsGroupYesterday" xml:space="preserve">
+    <value>昨天</value>
+  </data>
+  <data name="SessionsGroupThisWeek" xml:space="preserve">
+    <value>本周</value>
+  </data>
+  <data name="SessionsGroupEarlier" xml:space="preserve">
+    <value>更早</value>
+  </data>
+  <data name="SessionPreviewYou" xml:space="preserve">
+    <value>你</value>
+  </data>
+  <data name="UsageResetsFormat" xml:space="preserve">
+    <value>{0} 重置</value>
+  </data>
+  <data name="UsageTooltip" xml:space="preserve">
+    <value>Claude 订阅用量：滚动 5 小时窗口和每周限额（或网关支出限额），由 Claude Code 状态栏报告。会话运行期间会更新。</value>
+  </data>
+  <data name="SessionsEmpty" xml:space="preserve">
+    <value>此工作区还没有已保存的会话。</value>
+  </data>
+  <data name="SessionActive" xml:space="preserve">
+    <value>活动</value>
+  </data>
 
   <!-- Panel: toggles -->
   <data name="ToggleAutoAccept" xml:space="preserve">
@@ -260,9 +406,6 @@
   </data>
   <data name="EditsLabel" xml:space="preserve">
     <value>本轮编辑</value>
-  </data>
-  <data name="EditsCountFormat" xml:space="preserve">
-    <value>本轮编辑（{0}）</value>
   </data>
   <data name="EditsRewrittenFormat" xml:space="preserve">
     <value>整个文件，共 {0} 行</value>

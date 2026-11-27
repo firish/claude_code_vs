@@ -16,9 +16,10 @@ internal static class BridgeStatus
     /// <summary>One curated log line plus its level (so the panel can filter/colour it).</summary>
     public readonly struct LogEntry
     {
-        public LogEntry(LogLevel level, string text) { Level = level; Text = text; }
+        public LogEntry(LogLevel level, string text) { Level = level; Text = text; Time = DateTime.Now; }
         public LogLevel Level { get; }
         public string Text { get; }
+        public DateTime Time { get; }
     }
 
     private const int MaxLines = 500;
@@ -184,16 +185,76 @@ internal static class BridgeStatus
     /// <summary>
     /// In-IDE notifications ("Claude finished responding" / "Claude needs your input"): the main-window
     /// InfoBar + taskbar flash the <see cref="Notifier"/> raises from the Stop and Notification hooks.
-    /// Default ON - it's a convenience, not a safety gate - and in-memory like the other toggles, so the
-    /// panel checkbox is the whole story for a session.
+    /// Default ON - it's a convenience, not a safety gate - so unlike the safety toggles it is remembered
+    /// across VS restarts (<see cref="PanelSettings"/>; loaded by <see cref="LoadPersistedSettings"/>).
     /// </summary>
     public static bool NotifyEnabled { get; private set; } = true;
 
     public static void SetNotifyEnabled(bool value)
     {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread(); // the panel checkbox; the settings store wants the UI thread
         if (NotifyEnabled == value) return;
         NotifyEnabled = value;
+        PanelSettings.SetBool(PanelSettings.NotifyKey, value);
         Changed?.Invoke();
+    }
+
+    /// <summary>Activity feed: soft-wrap long lines (context-menu toggle). Off by default, remembered.</summary>
+    public static bool FeedWrap { get; private set; }
+
+    public static void SetFeedWrap(bool value)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        if (FeedWrap == value) return;
+        FeedWrap = value;
+        PanelSettings.SetBool(PanelSettings.FeedWrapKey, value);
+    }
+
+    /// <summary>
+    /// Install our statusLine (the source of the panel's usage row). On by default, remembered. Off means
+    /// no PowerShell per status-line refresh and the user's own status line back in place.
+    /// </summary>
+    public static bool UsageStatusLine { get; private set; } = true;
+
+    public static void SetUsageStatusLine(bool value)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        if (UsageStatusLine == value) return;
+        UsageStatusLine = value;
+        PanelSettings.SetBool(PanelSettings.UsageStatusLineKey, value);
+        if (!value) Limits = null; // stale the moment nothing refreshes it
+        Changed?.Invoke();
+    }
+
+    /// <summary>Activity feed: prefix each line with its time. Off by default, remembered.</summary>
+    public static bool FeedTimestamps { get; private set; }
+
+    public static void SetFeedTimestamps(bool value)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        FeedTimestamps = value;
+        PanelSettings.SetBool(PanelSettings.FeedTimestampsKey, value);
+    }
+
+    /// <summary>Activity feed: show only warnings and errors. Off by default, remembered.</summary>
+    public static bool FeedWarningsOnly { get; private set; }
+
+    public static void SetFeedWarningsOnly(bool value)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        FeedWarningsOnly = value;
+        PanelSettings.SetBool(PanelSettings.FeedWarningsOnlyKey, value);
+    }
+
+    /// <summary>Restore the remembered preferences. Called once at package init, on the UI thread.</summary>
+    public static void LoadPersistedSettings()
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        FeedTimestamps = PanelSettings.GetBool(PanelSettings.FeedTimestampsKey, fallback: false);
+        UsageStatusLine = PanelSettings.GetBool(PanelSettings.UsageStatusLineKey, fallback: true);
+        FeedWarningsOnly = PanelSettings.GetBool(PanelSettings.FeedWarningsOnlyKey, fallback: false);
+        FeedWrap = PanelSettings.GetBool(PanelSettings.FeedWrapKey, fallback: false);
+        NotifyEnabled = PanelSettings.GetBool(PanelSettings.NotifyKey, fallback: true);
     }
 
     /// <summary>Set by BridgeHost so the panel's Launch button can start the CLI.</summary>
@@ -207,6 +268,29 @@ internal static class BridgeStatus
     /// session even though one is already connected - bypasses LaunchAction's already-connected guard.</summary>
     public static Func<Task>? RelaunchAction { get; set; }
 
+    /// <summary>Set by BridgeHost: start the CLI with extra arguments (the Sessions card's
+    /// <c>--resume &lt;id&gt;</c> / <c>--continue</c>); always opens a new terminal, even beside a live session.</summary>
+    public static Func<string, Task>? LaunchSessionAction { get; set; }
+
+    /// <summary>The latest subscription usage reported by an owned session's status line, or null.</summary>
+    public static UsageLimits? Limits { get; private set; }
+
+    public static void SetLimits(UsageLimits limits)
+    {
+        Limits = limits;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Raised when the saved-session list may have changed (a turn ended: the transcript grew, a
+    /// title may have been generated, a new session may exist). The Sessions tab re-lists on it.</summary>
+    public static event Action? SessionsChanged;
+
+    public static void RaiseSessionsChanged() => SessionsChanged?.Invoke();
+
+    /// <summary>Set by BridgeHost: "Switch to session" - focus the window already hosting that session id,
+    /// or resume it in a new terminal when it isn't open.</summary>
+    public static Func<string, Task>? SwitchSessionAction { get; set; }
+
     /// <summary>Set by BridgeHost so the panel can bring the verbose Output pane forward (UI thread).</summary>
     public static Action? ShowOutputAction { get; set; }
 
@@ -217,8 +301,8 @@ internal static class BridgeStatus
     /// <summary>Fired when status/stats/pending change.</summary>
     public static event Action? Changed;
 
-    /// <summary>Fired for each new log line (with its level so the panel can filter).</summary>
-    public static event Action<LogLevel, string>? Logged;
+    /// <summary>Fired for each new log line (level + time ride along so the panel can filter and stamp).</summary>
+    public static event Action<LogEntry>? Logged;
 
     public static IReadOnlyList<LogEntry> LogSnapshot()
     {
@@ -277,6 +361,32 @@ internal static class BridgeStatus
     private static readonly List<Edits.EditEntry> TurnEditList = new();
     private static bool _editsStale; // a new turn began; the list still shows the last one until it edits
 
+    /// <summary>One earlier turn's edits, for the EDITS tab's turn picker.</summary>
+    public sealed class EditTurn
+    {
+        public EditTurn(DateTime started, string? prompt, Edits.EditEntry[] rows) { Started = started; Prompt = prompt; Rows = rows; }
+        public DateTime Started { get; }
+        public string? Prompt { get; }
+        public Edits.EditEntry[] Rows { get; }
+    }
+
+    private const int MaxTurnHistory = 10;
+    private static readonly List<EditTurn> TurnHistory = new(); // newest first
+    private static DateTime _turnStarted = DateTime.Now;
+    private static string? _turnPrompt;
+
+    /// <summary>The last few finished turns that made edits, newest first.</summary>
+    public static IReadOnlyList<EditTurn> EditHistory
+    {
+        get { lock (Gate) return TurnHistory.ToArray(); }
+    }
+
+    /// <summary>When the current turn's first edit landed (its turn start, when known), and its prompt.</summary>
+    public static (DateTime Started, string? Prompt) CurrentEditTurn
+    {
+        get { lock (Gate) return (_turnStarted, _turnPrompt); }
+    }
+
     /// <summary>Jump targets for the changes Claude made in the current turn, newest last.</summary>
     public static IReadOnlyList<Edits.EditEntry> TurnEdits
     {
@@ -294,12 +404,68 @@ internal static class BridgeStatus
         if (rows is null || rows.Count == 0) return;
         lock (Gate)
         {
-            if (_editsStale) { TurnEditList.Clear(); _editsStale = false; }
+            if (_editsStale)
+            {
+                // The finished turn moves into the history the EDITS tab's turn picker offers.
+                if (TurnEditList.Count > 0)
+                {
+                    TurnHistory.Insert(0, new EditTurn(_turnStarted, _turnPrompt, TurnEditList.ToArray()));
+                    if (TurnHistory.Count > MaxTurnHistory) TurnHistory.RemoveAt(TurnHistory.Count - 1);
+                }
+                TurnEditList.Clear();
+                _editsStale = false;
+            }
+            if (TurnEditList.Count == 0)
+            {
+                _turnStarted = Activity.AgentActivity.TurnStartedAt ?? DateTime.Now;
+                _turnPrompt = Activity.AgentActivity.PromptPreview;
+            }
             TurnEditList.AddRange(rows);
             if (TurnEditList.Count > MaxTurnEdits)
                 TurnEditList.RemoveRange(0, TurnEditList.Count - MaxTurnEdits);
+            EnforceSnapshotBudget();
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>Upper bound for the before/after texts kept for "Show diff", in bytes (UTF-16). Settable so
+    /// tests can exercise the eviction without allocating 64 MB.</summary>
+    internal static long SnapshotBudgetBytes { get; set; } = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Keep the newest snapshots within <see cref="SnapshotBudgetBytes"/> and drop the rest. Each edit keeps
+    /// its file's full before/after text, so a big file edited many times across the remembered turns could
+    /// otherwise hold hundreds of MB. Walks newest -> oldest (current turn from its end, then the history);
+    /// a dropped snapshot just disables that row's "Show diff". Caller holds <see cref="Gate"/>.
+    /// </summary>
+    private static void EnforceSnapshotBudget()
+    {
+        long used = 0;
+        var counted = new HashSet<Edits.EditSnapshot>();
+        IEnumerable<Edits.EditEntry> NewestFirst()
+        {
+            for (int i = TurnEditList.Count - 1; i >= 0; i--) yield return TurnEditList[i];
+            foreach (var turn in TurnHistory)
+                for (int i = turn.Rows.Length - 1; i >= 0; i--) yield return turn.Rows[i];
+        }
+        foreach (var row in NewestFirst())
+        {
+            if (row.Snapshot is not { } snapshot) continue;
+            if (counted.Contains(snapshot)) continue; // rows of one edit share it
+            long size = 2L * (snapshot.Before.Length + snapshot.After.Length);
+            if (used + size <= SnapshotBudgetBytes)
+            {
+                used += size;
+                counted.Add(snapshot);
+            }
+            else
+            {
+                row.Snapshot = null;
+            }
+        }
+        // Rows that shared a dropped snapshot but were visited before the drop decision still point at it.
+        foreach (var row in NewestFirst())
+            if (row.Snapshot != null && !counted.Contains(row.Snapshot)) row.Snapshot = null;
     }
 
     /// <summary>A new turn began (UserPromptSubmit). The next edit replaces the list; until then it stands.</summary>
@@ -339,12 +505,12 @@ internal static class BridgeStatus
 
     public static void Append(LogLevel level, string message)
     {
-        var line = $"[{level.ToString().ToLowerInvariant()}] {message}";
+        var entry = new LogEntry(level, $"[{level.ToString().ToLowerInvariant()}] {message}");
         lock (Gate)
         {
-            Lines.Add(new LogEntry(level, line));
+            Lines.Add(entry);
             if (Lines.Count > MaxLines) Lines.RemoveAt(0);
         }
-        Logged?.Invoke(level, line);
+        Logged?.Invoke(entry);
     }
 }

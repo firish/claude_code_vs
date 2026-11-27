@@ -42,6 +42,7 @@ public sealed class ClaudeCodeVsPackage : AsyncPackage
         // tool window can exist (VS finishes package init before creating its tool windows).
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         InitUiCulture();
+        Ui.BridgeStatus.LoadPersistedSettings(); // remembered panel preferences (Notify), same pre-render window
         await TaskScheduler.Default; // hop back off the UI thread for server startup
 
         _host = new BridgeHost(this);

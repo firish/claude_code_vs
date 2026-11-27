@@ -37,6 +37,152 @@
   <data name="BtnRelaunch" xml:space="preserve">
     <value>Relaunch Claude Code</value>
   </data>
+  <data name="SessionsHeader" xml:space="preserve">
+    <value>Sessions</value>
+  </data>
+  <data name="BtnSessionsRefresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="BtnSessionsNew" xml:space="preserve">
+    <value>New</value>
+  </data>
+  <data name="TipSessionResume" xml:space="preserve">
+    <value>Double-click to resume this session</value>
+  </data>
+  <data name="SessionMenuSwitch" xml:space="preserve">
+    <value>Switch to session</value>
+  </data>
+  <data name="SessionMenuRename" xml:space="preserve">
+    <value>Rename…</value>
+  </data>
+  <data name="FeedMenuCopy" xml:space="preserve">
+    <value>Copy</value>
+  </data>
+  <data name="FeedMenuSelectAll" xml:space="preserve">
+    <value>Select all</value>
+  </data>
+  <data name="FeedMenuWrap" xml:space="preserve">
+    <value>Wrap lines</value>
+  </data>
+  <data name="SessionMenuDelete" xml:space="preserve">
+    <value>Delete…</value>
+  </data>
+  <data name="SessionDeleteTitle" xml:space="preserve">
+    <value>Delete session</value>
+  </data>
+  <data name="SessionDeleteConfirmFormat" xml:space="preserve">
+    <value>Delete the session "{0}"?
+
+Its transcript, file history and other session data will be removed permanently. This cannot be undone.</value>
+  </data>
+  <data name="SessionDeleteOpen" xml:space="preserve">
+    <value>This session is open in a terminal. Exit Claude Code there first, then delete it.</value>
+  </data>
+  <data name="RenameTitle" xml:space="preserve">
+    <value>Rename session</value>
+  </data>
+  <data name="RenamePrompt" xml:space="preserve">
+    <value>New name for this session:</value>
+  </data>
+  <data name="BtnRenameOk" xml:space="preserve">
+    <value>Rename</value>
+  </data>
+  <data name="TabEdits" xml:space="preserve">
+    <value>Edits</value>
+  </data>
+  <data name="EditsEmpty" xml:space="preserve">
+    <value>No edits in this turn yet.</value>
+  </data>
+  <data name="TipSplitter" xml:space="preserve">
+    <value>Drag to resize. Double-click to size automatically.</value>
+  </data>
+  <data name="ToggleUsage" xml:space="preserve">
+    <value>Show subscription usage</value>
+  </data>
+  <data name="TipUsageToggle" xml:space="preserve">
+    <value>Installs a Claude Code status line that relays your subscription usage (5-hour and weekly limits) to this panel. Your own status line keeps working. Costs one PowerShell start per status-line refresh; turning it off removes it and restores your own status line. Applies to new sessions.</value>
+  </data>
+  <data name="TipSettings" xml:space="preserve">
+    <value>Settings: auto-accept, debugger drive, screen capture, notifications</value>
+  </data>
+  <data name="UsageFiveHourLabel" xml:space="preserve">
+    <value>5-hour</value>
+  </data>
+  <data name="UsageSevenDayLabel" xml:space="preserve">
+    <value>Weekly</value>
+  </data>
+  <data name="UsageSpendLabel" xml:space="preserve">
+    <value>Spend</value>
+  </data>
+  <data name="FeedMenuTimestamps" xml:space="preserve">
+    <value>Show timestamps</value>
+  </data>
+  <data name="FeedMenuWarningsOnly" xml:space="preserve">
+    <value>Warnings and errors only</value>
+  </data>
+  <data name="TipEditsTurn" xml:space="preserve">
+    <value>Choose which turn's edits to show</value>
+  </data>
+  <data name="EditsTurnCurrentFormat" xml:space="preserve">
+    <value>Current turn ({0})</value>
+  </data>
+  <data name="EditsTurnPastFormat" xml:space="preserve">
+    <value>{0} · {1} ({2})</value>
+  </data>
+  <data name="EditsMenuOpen" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="EditsMenuShowDiff" xml:space="preserve">
+    <value>Show diff</value>
+  </data>
+  <data name="EditsLineFormat" xml:space="preserve">
+    <value>line {0}</value>
+  </data>
+  <data name="EditsDiffCaptionFormat" xml:space="preserve">
+    <value>Claude Code edit: {0}</value>
+  </data>
+  <data name="EditsDiffBeforeFormat" xml:space="preserve">
+    <value>{0} (before)</value>
+  </data>
+  <data name="EditsDiffAfterFormat" xml:space="preserve">
+    <value>{0} (after)</value>
+  </data>
+  <data name="SessionsOpenCountFormat" xml:space="preserve">
+    <value>{0} open</value>
+  </data>
+  <data name="SessionsNoMatch" xml:space="preserve">
+    <value>No sessions match the filter.</value>
+  </data>
+  <data name="SessionsFilterHint" xml:space="preserve">
+    <value>Filter</value>
+  </data>
+  <data name="SessionsGroupToday" xml:space="preserve">
+    <value>Today</value>
+  </data>
+  <data name="SessionsGroupYesterday" xml:space="preserve">
+    <value>Yesterday</value>
+  </data>
+  <data name="SessionsGroupThisWeek" xml:space="preserve">
+    <value>This week</value>
+  </data>
+  <data name="SessionsGroupEarlier" xml:space="preserve">
+    <value>Earlier</value>
+  </data>
+  <data name="SessionPreviewYou" xml:space="preserve">
+    <value>You</value>
+  </data>
+  <data name="UsageResetsFormat" xml:space="preserve">
+    <value>resets {0}</value>
+  </data>
+  <data name="UsageTooltip" xml:space="preserve">
+    <value>Claude subscription usage: the rolling 5-hour window and the weekly limit (or a gateway spend limit), as reported by the Claude Code status line. Updates while a session is working.</value>
+  </data>
+  <data name="SessionsEmpty" xml:space="preserve">
+    <value>No saved sessions for this workspace yet.</value>
+  </data>
+  <data name="SessionActive" xml:space="preserve">
+    <value>active</value>
+  </data>
 
   <!-- Panel: toggles -->
   <data name="ToggleAutoAccept" xml:space="preserve">
@@ -260,9 +406,6 @@
   </data>
   <data name="EditsLabel" xml:space="preserve">
     <value>Edits this turn</value>
-  </data>
-  <data name="EditsCountFormat" xml:space="preserve">
-    <value>Edits this turn ({0})</value>
   </data>
   <data name="EditsRewrittenFormat" xml:space="preserve">
     <value>whole file, {0} lines</value>

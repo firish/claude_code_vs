@@ -189,7 +189,7 @@ public sealed class IdeWebSocketServer
         {
             var path = ctx.Request.Url?.AbsolutePath;
             bool isPost = string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase);
-            if (isPost && path is "/permission" or "/usage" or "/notify" or "/debug-context")
+            if (isPost && path is "/permission" or "/usage" or "/notify" or "/debug-context" or "/statusline")
             {
                 // Read + parse the body ONCE here: the ownership gate needs the hook's cwd, and the
                 // request stream cannot be re-read by the handlers.
@@ -214,6 +214,14 @@ public sealed class IdeWebSocketServer
                     return;
                 }
 
+                // The status line posts on every CLI status refresh - far more often than any hook. It only
+                // needs the ownership gate above; the observers below are per-turn work it must not repeat.
+                if (path == "/statusline")
+                {
+                    HandleStatusLineRequest(ctx, body);
+                    return;
+                }
+
                 HookActivity?.Invoke(); // after the gate: foreign traffic must not look like a local session
 
                 // Refresh the session's CLI permission mode from ANY hook that carries it, not just
@@ -228,6 +236,21 @@ public sealed class IdeWebSocketServer
                 {
                     try { PermissionModeObserved?.Invoke(observedMode); }
                     catch (Exception e) { Log.Warn($"permission-mode observer failed: {e.Message}"); }
+                }
+
+                // Which session is this, and which CLI process runs it? Every hook sends its transcript path
+                // (file name = session id) and its own pid; the CLI is the connected pid that is an ancestor.
+                var seenTranscript = (string?)body["transcript_path"];
+                var seenHookPid = (int?)body["pid"];
+                if (!string.IsNullOrEmpty(seenTranscript) && seenHookPid is > 0 && ProcessTree.Available)
+                {
+                    foreach (var cliPid in ConnectedCliPids())
+                    {
+                        if (!ProcessTree.IsSelfOrAncestor(cliPid, seenHookPid.Value)) continue;
+                        try { SessionObserved?.Invoke(seenTranscript!, cliPid); }
+                        catch (Exception e) { Log.Warn($"session observer failed: {e.Message}"); }
+                        break;
+                    }
                 }
 
                 switch (path)
@@ -287,6 +310,10 @@ public sealed class IdeWebSocketServer
         finally
         {
             _connections.TryRemove(conn, out _);
+            if (conn.CliPid is int gonePid)
+            {
+                try { CliDisconnected?.Invoke(gonePid); } catch (Exception e) { Log.Warn($"CLI-disconnected observer failed: {e.Message}"); }
+            }
             conn.Dispose();
             Log.Info($"client disconnected ({remote})");
             try { ConnectionChanged?.Invoke(HasConnections); } catch { }
@@ -305,6 +332,10 @@ public sealed class IdeWebSocketServer
     /// panel tracks mode changes made with shift+tab instead of only learning about them on the next edit.
     /// </summary>
     public Action<string>? PermissionModeObserved { get; set; }
+
+    /// <summary>Raised with (transcript path, CLI pid) whenever an owned hook POST identifies its session -
+    /// the Sessions card uses it to know which sessions are open and in which CLI process.</summary>
+    public Action<string, int>? SessionObserved { get; set; }
 
     /// <summary>
     /// Raised when the UserPromptSubmit hook POSTs /debug-context - a turn just began - with the session
@@ -492,6 +523,27 @@ public sealed class IdeWebSocketServer
         try { ctx.Response.StatusCode = 200; ctx.Response.Close(); } catch { /* client gave up */ }
     }
 
+    /// <summary>
+    /// Raised with the CLI's <c>rate_limits</c> object (five_hour / seven_day / spend_limit windows) each
+    /// time the owned session's status line reports it - vs-statusline.ps1 posts it to /statusline.
+    /// </summary>
+    public Action<JObject>? RateLimitsReceived { get; set; }
+
+    private void HandleStatusLineRequest(HttpListenerContext ctx, JObject o)
+    {
+        // Answer first: the status-line script is on the CLI's render path and gets cancelled by the next
+        // update, so it must never wait on the panel.
+        try { ctx.Response.StatusCode = 200; ctx.Response.Close(); } catch { /* client gave up */ }
+        try
+        {
+            if (o["rate_limits"] is JObject limits) RateLimitsReceived?.Invoke(limits);
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"statusline request failed: {e.Message}");
+        }
+    }
+
     private async Task HandleNotifyRequestAsync(HttpListenerContext ctx, JObject o, CancellationToken ct)
     {
         try
@@ -593,7 +645,12 @@ public sealed class IdeWebSocketServer
     /// POST from MY session" can only be answered by comparing folder paths, which a SECOND Claude session
     /// in the same tree - one running under VS Code, say - matches exactly as well (issue #42).
     /// </summary>
-    private static void CaptureCliPid(Connection conn, string json)
+    /// <summary>A CLI identified itself (its `ide_connected` pid) / its socket closed. The Sessions card uses
+    /// these to know a session's CLI is alive from the moment it starts, not only after its first hook.</summary>
+    public Action<int>? CliConnected { get; set; }
+    public Action<int>? CliDisconnected { get; set; }
+
+    private void CaptureCliPid(Connection conn, string json)
     {
         if (conn.CliPid is not null) return;
         if (json.IndexOf("ide_connected", StringComparison.Ordinal) < 0) return;
@@ -606,6 +663,7 @@ public sealed class IdeWebSocketServer
             {
                 conn.CliPid = pid;
                 Log.Info($"CLI session identified: pid {pid} (edit gate will only answer for this process tree)");
+                try { CliConnected?.Invoke(pid.Value); } catch (Exception e) { Log.Warn($"CLI-connected observer failed: {e.Message}"); }
             }
         }
         catch { /* malformed notification - stay on the path-based fallback */ }

@@ -34,6 +34,10 @@ internal static class VsTerminalLauncher
     /// <summary>How long the native-terminal attempt may take before the external console takes over.</summary>
     private const int LaunchTimeoutMs = 10_000;
 
+    /// <summary>How long the cached "Claude Code" profile stays registered after a 17.x create, so the
+    /// tab's late-starting pty still finds it (see TryLaunchCoreAsync's finally).</summary>
+    private const int LegacyProfileLingerMs = 30_000;
+
     public static async Task<bool> TryLaunchAsync(string? workingDirectory, int ssePort, CancellationToken ct, string? claudeArgs = null, string? tabName = null)
     {
         try
@@ -92,8 +96,14 @@ internal static class VsTerminalLauncher
             // classic VS service: SVsTerminalService -> IVsTerminalService.CreateTerminalService().
             // Older VS - including every 17.x - only has the brokered descriptor. ITerminalService
             // itself is unchanged on both, so everything downstream of here is shared.
+            // On 17.x a THIRD route comes first: an in-proc TerminalService built on the package's own
+            // TerminalManager (see TryGetInProcService - the brokered proxy loses the profile in transit).
             bool viaBroker = false;
             object? terminalService = await TryGetViaVsServiceAsync(ct);
+            if (terminalService == null && windowOptionsType == null)
+            {
+                terminalService = TryGetInProcService(ref terminalServiceType, ref profileConfigType);
+            }
             if (terminalService == null)
             {
                 terminalService = await TryGetViaBrokerAsync(terminalServiceType, ct);
@@ -106,6 +116,8 @@ internal static class VsTerminalLauncher
             }
 
             object? profile = null;
+            object? terminalPackage = null; // set when the profile was cached in-proc (VS 2022 route)
+            bool deferCleanup = false;
             try
             {
                 // Last gate before side effects (AddCachedProfile / the create call): the proxy
@@ -126,12 +138,29 @@ internal static class VsTerminalLauncher
                 string args = $"/K set ENABLE_IDE_INTEGRATION=true&&set CLAUDE_CODE_SSE_PORT={ssePort}&&claude"
                             + (string.IsNullOrEmpty(claudeArgs) ? "" : " " + claudeArgs)
                             + (Ui.BridgeStatus.AutoAcceptEdits ? " --permission-mode acceptEdits" : ""); // run-wild at launch: see BridgeHost.LaunchClaudeAsync
-                profile = profileCtor.Invoke(new object?[] { "Claude Code", "cmd.exe", args, false });
+                // DisplayName doubles as the tab caption on 17.x (GetToolWindowTitle reads the profile's name).
+                string name = CaptionOf(string.IsNullOrWhiteSpace(tabName) ? "Claude Code" : tabName!);
+                // A ROOTED path, not "cmd.exe": the 17.x pty host resolves a bare name through its own PATH
+                // lookup (Pty.Net GetAppOnPath over the env block VS hands it), and with our profile that spawned
+                // nothing at all - a blank tab and a pty service with no child process (seen live on 17.10).
+                // VS's own built-in profiles all carry absolute paths, which is the shape that works everywhere.
+                string shell = Environment.GetEnvironmentVariable("ComSpec") is { Length: > 0 } comSpec && File.Exists(comSpec)
+                    ? comSpec
+                    : Path.Combine(Environment.SystemDirectory, "cmd.exe");
+                profile = profileCtor.Invoke(new object?[] { name, shell, args, false });
 
                 // TerminalWindowOptions.Profile alone is ignored unless the profile is first registered with the
-                // service - without this, CreateTerminalWindowAsync silently falls back to the user's default shell.
-                PickMethod(terminalServiceType, "AddCachedProfile", m => m.GetParameters().Length == 1)?
-                    .Invoke(terminalService, new object?[] { profile });
+                // service - without this, the terminal silently falls back to the user's default shell.
+                // On the brokered route (VS 2022) the service's AddCachedProfile(ITerminalProfile) is a no-op in
+                // practice: an interface-typed parameter can't be deserialized on the far side, the notification
+                // dies silently, and the tab opens the DEFAULT profile (seen live on 17.10: a bare Developer
+                // PowerShell). The create call only carries the profile's Id, which the window then looks up in
+                // the package's cache - so register it in-proc, straight on TerminalWindowPackage.
+                if (viaBroker)
+                    terminalPackage = TryCacheProfileInProc(profile, add: true);
+                if (terminalPackage == null)
+                    PickMethod(terminalServiceType, "AddCachedProfile", m => m.GetParameters().Length == 1)?
+                        .Invoke(terminalService, new object?[] { profile });
 
                 // Same overload tolerance as GetProxyAsync, plus parameter-ORDER tolerance: pick the
                 // 2-arg overload taking (options, token) in either order and build the call to match.
@@ -145,7 +174,6 @@ internal static class VsTerminalLauncher
 
                 object? guidResult;
                 string surface;
-                string name = CaptionOf(string.IsNullOrWhiteSpace(tabName) ? "Claude Code" : tabName!);
                 var framesBefore = SnapshotToolFrames();
                 if (create != null)
                 {
@@ -166,25 +194,73 @@ internal static class VsTerminalLauncher
                 {
                     // VS 2022 (17.x) legacy surface: CreateTerminalAsync(ct, name, ProfileConfig, cwd).
                     // Prefer the exact-ProfileConfig overload over its ITerminalProfile twin.
+                    // Prefer the 3-arg (no working directory) overload. In 17.10 the 4-arg one takes a
+                    // renderer path that creates the pseudo console BEFORE the tab has been laid out, so it
+                    // asks ConPTY for a 0x0 console, gets E_INVALIDARG ("Value does not fall within the
+                    // expected range", from ServiceHubPtyProxy.InitPtyAsync - found in a devenv heap snapshot)
+                    // and leaves a blank tab. The 3-arg one is the "+" button's path: window first, then the
+                    // pty at the window's real size, started in the open folder/solution - our workspace.
+                    bool withCwd = false;
                     var createLegacy = PickMethod(terminalServiceType, "CreateTerminalAsync", m =>
                     {
                         var p = m.GetParameters();
-                        return p.Length == 4
+                        return p.Length == 3
                             && p[0].ParameterType == typeof(CancellationToken)
                             && p[1].ParameterType == typeof(string)
-                            && p[2].ParameterType == profileConfigType
-                            && p[3].ParameterType == typeof(string);
+                            && p[2].ParameterType == profileConfigType;
                     });
+                    if (createLegacy == null)
+                    {
+                        withCwd = true;
+                        createLegacy = PickMethod(terminalServiceType, "CreateTerminalAsync", m =>
+                        {
+                            var p = m.GetParameters();
+                            return p.Length == 4
+                                && p[0].ParameterType == typeof(CancellationToken)
+                                && p[1].ParameterType == typeof(string)
+                                && p[2].ParameterType == profileConfigType
+                                && p[3].ParameterType == typeof(string);
+                        });
+                    }
+                    object?[] LegacyArgs() => withCwd
+                        ? new object?[] { ct, name, profile, workingDirectory }
+                        : new object?[] { ct, name, profile };
                     if (createLegacy == null)
                     {
                         Log.Warn("Native VS terminal: neither CreateTerminalWindowAsync (18.x) nor a compatible CreateTerminalAsync (17.x) found - falling back to external console.");
                         return false;
                     }
-                    guidResult = await UnwrapAsync(createLegacy.Invoke(terminalService, new object?[] { ct, name, profile, workingDirectory }));
+                    // On a cold VS 2022 (17.10, verified) the first create after startup can fail server-side
+                    // with RemoteInvocationException "Value does not fall within the expected range", and the
+                    // identical call succeeds a moment later - so retry once before giving up on the native tab.
+                    try
+                    {
+                        guidResult = await UnwrapAsync(createLegacy.Invoke(terminalService, LegacyArgs()));
+                    }
+                    catch (Exception first) when (!ct.IsCancellationRequested)
+                    {
+                        var cause = first is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : first;
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+                        // The failure can come AFTER the tab was created (seen live: a retry left two tabs).
+                        // If one appeared, keep it - it runs our profile - and just go without its guid.
+                        if (SnapshotToolFrames().Any(f => !framesBefore.Contains(f)))
+                        {
+                            Log.Event($"Native VS terminal: create reported {cause.GetType().Name} ({cause.Message}) but the tab exists - keeping it.");
+                            guidResult = Guid.Empty;
+                        }
+                        else
+                        {
+                            Log.Event($"Native VS terminal: first create failed ({cause.GetType().Name}: {cause.Message}) - retrying once.");
+                            await Task.Delay(1500, ct);
+                            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+                            guidResult = await UnwrapAsync(createLegacy.Invoke(terminalService, LegacyArgs()));
+                        }
+                    }
                     surface = "17.x legacy surface";
+                    deferCleanup = guidResult is Guid; // see the finally block: 17.x resolves the profile late
 
                     // The old surface has no Focus option; ShowAsync is its bring-to-front. Best-effort.
-                    if (guidResult is Guid g)
+                    if (guidResult is Guid g && g != Guid.Empty)
                     {
                         try
                         {
@@ -215,21 +291,41 @@ internal static class VsTerminalLauncher
             }
             finally
             {
-                // The cached profile is only needed while CreateTerminalWindowAsync resolves it (VS doesn't
-                // use it for tab restore either - restored tabs come back as the default shell). Deregister
-                // it immediately so "Claude Code" never accumulates in the terminal's profile dropdown.
-                try
+                // The cached profile is only needed while the terminal resolves it (VS doesn't use it for tab
+                // restore either - restored tabs come back as the default shell), then it's deregistered so
+                // "Claude Code" never accumulates in the terminal's profile dropdown.
+                // On 17.x the cleanup waits a while as a safety margin (the tab may re-read its profile while
+                // it finishes initializing); 18.x resolves it inside the create call.
+                var svc = terminalService;
+                var prof = profile;
+                var pkg = terminalPackage;
+                bool ownsProxy = viaBroker;
+                void Cleanup()
                 {
-                    if (profile != null)
-                        PickMethod(terminalServiceType, "RemoveCachedProfile", m => m.GetParameters().Length == 1)?
-                            .Invoke(terminalService, new object?[] { profile });
-                }
-                catch { /* best-effort cleanup; the profile cache is cosmetic */ }
+                    ThreadHelper.ThrowIfNotOnUIThread();
+                    try
+                    {
+                        if (prof != null && (pkg == null || TryCacheProfileInProc(prof, add: false) == null))
+                            PickMethod(terminalServiceType, "RemoveCachedProfile", m => m.GetParameters().Length == 1)?
+                                .Invoke(svc, new object?[] { prof });
+                    }
+                    catch { /* best-effort cleanup; the profile cache is cosmetic */ }
 
-                // Brokered-service proxies must be disposed - each GetProxyAsync hands out a live RPC
-                // client. The 18.9+ SVsTerminalService route hands back a service the SHELL owns, so
-                // disposing that one would tear down state we don't own.
-                if (viaBroker) (terminalService as IDisposable)?.Dispose();
+                    // Brokered-service proxies must be disposed - each GetProxyAsync hands out a live RPC
+                    // client. The 18.9+ SVsTerminalService route hands back a service the SHELL owns, so
+                    // disposing that one would tear down state we don't own.
+                    if (ownsProxy) (svc as IDisposable)?.Dispose();
+                }
+
+                if (deferCleanup || !ThreadHelper.CheckAccess())
+                    _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                    {
+                        if (deferCleanup) await Task.Delay(LegacyProfileLingerMs);
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                        Cleanup();
+                    });
+                else
+                    Cleanup();
             }
         }
         catch (OperationCanceledException)
@@ -272,6 +368,14 @@ internal static class VsTerminalLauncher
         return Marker + title;
     }
 
+    /// <summary>Bring a terminal tab forward by its window frame - for a tab whose guid we never got.</summary>
+    public static async Task<bool> TryShowFrameAsync(IVsWindowFrame frame, CancellationToken ct)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+        try { return ErrorHandler.Succeeded(frame.Show()); }
+        catch { return false; }
+    }
+
     /// <summary>Retitle a terminal tab. UI thread. False when the frame is gone (tab closed).</summary>
     public static bool TrySetCaption(IVsWindowFrame frame, string title)
     {
@@ -281,6 +385,98 @@ internal static class VsTerminalLauncher
             return ErrorHandler.Succeeded(frame.SetProperty((int)__VSFPROPID.VSFPROPID_Caption, CaptionOf(title)));
         }
         catch { return false; }
+    }
+
+    private static object? _inProcService;
+
+    /// <summary>
+    /// VS 2022 (17.x) route: build the terminal service IN-PROC instead of taking the brokered proxy.
+    /// Over the broker, CreateTerminalAsync's profile argument never arrives intact (two 4-arg overloads,
+    /// ProfileConfig and ITerminalProfile, share one RPC name; the server ends up with no profile and
+    /// substitutes the default one) and AddCachedProfile(ITerminalProfile) can't be deserialized at all -
+    /// so every tab opened as a bare Developer PowerShell (seen live on 17.10). The package itself builds
+    /// its brokered service as <c>new TerminalService(this.terminalManager)</c> (from the 17.10 IL), so we
+    /// do exactly that, and every call then runs on real objects. The service is cached (its ctor hooks
+    /// manager events). Returns null on any mismatch, leaving the broker as the fallback. UI thread.
+    /// </summary>
+    private static object? TryGetInProcService(ref Type serviceInterface, ref Type profileConfigType)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (_inProcService == null)
+            {
+                if (Package.GetGlobalService(typeof(SVsShell)) is not IVsShell shell) return null;
+                var guid = TerminalPackageGuid;
+                if (!ErrorHandler.Succeeded(shell.LoadPackage(ref guid, out var vsPackage)) || vsPackage == null) return null;
+                object pkg = vsPackage;
+
+                object? manager = null;
+                for (var t = pkg.GetType(); t != null && manager == null; t = t.BaseType)
+                    manager = t.GetField("terminalManager", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.GetValue(pkg);
+                var implType = pkg.GetType().Assembly.GetType("Microsoft.VisualStudio.Terminal.TerminalService", false);
+                var ctor = manager == null ? null : implType?.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(c => c.GetParameters().Length == 1 && c.GetParameters()[0].ParameterType.IsInstanceOfType(manager));
+                if (ctor == null)
+                {
+                    Log.Event("Native VS terminal: in-proc TerminalService not constructible (package shape changed) - using the brokered service.");
+                    return null;
+                }
+                _inProcService = ctor.Invoke(new[] { manager });
+            }
+
+            var iface = _inProcService.GetType().GetInterfaces()
+                .FirstOrDefault(i => i.FullName == "Microsoft.VisualStudio.Terminal.ITerminalService");
+            if (iface == null) { _inProcService = null; return null; }
+            // Use the types of the assembly devenv actually loaded, so reflection calls bind to this instance.
+            serviceInterface = iface;
+            profileConfigType = iface.Assembly.GetType("Microsoft.VisualStudio.Terminal.ProfileConfig", false) ?? profileConfigType;
+            Log.Event("Native VS terminal: using the in-proc terminal service (17.x).");
+            return _inProcService;
+        }
+        catch (Exception e)
+        {
+            Log.Event($"Native VS terminal: in-proc terminal service failed ({e.GetType().Name}: {e.Message}) - using the brokered service.");
+            _inProcService = null;
+            return null;
+        }
+    }
+
+    /// <summary>The Terminal's VS package (from its pkgdef, same on 17.x and 18.x).</summary>
+    private static readonly Guid TerminalPackageGuid = new("E632CA91-B170-401A-AC2E-6B83FFDC3C10");
+
+    /// <summary>
+    /// Add (or remove) <paramref name="profile"/> in TerminalWindowPackage's cached-profile list directly,
+    /// in-proc, bypassing the brokered service whose interface-typed AddCachedProfile can't carry it.
+    /// Returns the package on success, null if the package or its method isn't reachable. UI thread.
+    /// </summary>
+    private static object? TryCacheProfileInProc(object profile, bool add)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (Package.GetGlobalService(typeof(SVsShell)) is not IVsShell shell) return null;
+            var guid = TerminalPackageGuid;
+            if (!ErrorHandler.Succeeded(shell.LoadPackage(ref guid, out var vsPackage)) || vsPackage == null) return null;
+            object pkg = vsPackage; // a managed package in this AppDomain comes back as the object itself
+            string name = add ? "AddCachedProfile" : "RemoveCachedProfile";
+            var method = pkg.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(m => m.Name == name
+                    && m.GetParameters().Length == 1
+                    && m.GetParameters()[0].ParameterType.IsInstanceOfType(profile));
+            if (method == null)
+            {
+                Log.Event($"Native VS terminal: {pkg.GetType().FullName} has no {name}(profile) - using the service route.");
+                return null;
+            }
+            method.Invoke(pkg, new[] { profile });
+            return pkg;
+        }
+        catch (Exception e)
+        {
+            Log.Event($"Native VS terminal: in-proc profile {(add ? "registration" : "removal")} failed ({e.GetType().Name}: {e.Message}).");
+            return null;
+        }
     }
 
     private static HashSet<object> SnapshotToolFrames()
@@ -332,6 +528,12 @@ internal static class VsTerminalLauncher
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
             bool viaBroker = false;
             object? svc = await TryGetViaVsServiceAsync(ct);
+            if (svc == null && _inProcService != null)
+            {
+                // A tab created through the in-proc service (17.x) is only known to that service's manager.
+                var unusedProfileType = terminalServiceType;
+                svc = TryGetInProcService(ref terminalServiceType, ref unusedProfileType);
+            }
             if (svc == null)
             {
                 svc = await TryGetViaBrokerAsync(terminalServiceType, ct);

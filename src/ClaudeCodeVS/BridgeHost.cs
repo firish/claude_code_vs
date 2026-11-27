@@ -901,7 +901,9 @@ internal sealed class BridgeHost : IDisposable
             var tab = Terminal.VsTerminalLauncher.LastTerminal;
             var frame = Terminal.VsTerminalLauncher.LastFrame;
             Sessions.SessionWindows.CompleteLaunch(launch,
-                () => Terminal.VsTerminalLauncher.TryFocusAsync(_cts.Token, tab),
+                tab == Guid.Empty && frame != null
+                    ? () => Terminal.VsTerminalLauncher.TryShowFrameAsync(frame, _cts.Token)
+                    : () => Terminal.VsTerminalLauncher.TryFocusAsync(_cts.Token, tab),
                 frame == null ? null : title => Terminal.VsTerminalLauncher.TrySetCaption(frame, title),
                 tabTitle);
             return;

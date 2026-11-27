@@ -11,13 +11,13 @@
     <Tags>claude, claude code, ai, anthropic, llm, agent, coding assistant, diff, mcp, c++, c#</Tags>
   </Metadata>
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.10,19.0)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
     <!-- Experimental (1.14.3): the extension is managed/AnyCPU and the reflected VS surfaces are the
          host's own, so ARM64 devenv runs it natively. x64-only pieces (the bundled ClrMD worker, managed
          data breakpoints) refuse with clear messages at runtime rather than failing confusingly. -->
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,19.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.10,19.0)">
       <ProductArchitecture>arm64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
@@ -25,7 +25,7 @@
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
   </Dependencies>
   <Prerequisites>
-    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.14,19.0)" DisplayName="Visual Studio core editor" />
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.10,19.0)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />

@@ -115,7 +115,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.10.40171" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.6.38345">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -127,7 +127,7 @@
          hosts Roslyn in-proc and VisualStudioWorkspace is the supported extension entry point, so
          unlike ClrMD this works in-proc. Bringing LanguageServices transitively pulls the
          Microsoft.CodeAnalysis.Workspaces compile refs (SymbolFinder, Solution, DocumentationCommentId). -->
-    <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="4.14.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="4.10.0" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>

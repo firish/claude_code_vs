@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -9,10 +11,8 @@ namespace ClaudeCodeVs;
 
 /// <summary>
 /// Routes the protocol core's <see cref="PLog"/> output to a "Claude Code" pane in the VS Output
-/// window. Created once on the UI thread; thereafter <see cref="WriteLine"/> uses
-/// <c>OutputStringThreadSafe</c>, which is safe to call from the off-thread WS receive loop - so no
-/// per-line marshaling is needed (CLAUDE.md convention #1 is about VS *editor/solution* calls; the
-/// output pane has its own thread-safe entry point).
+/// window. Created once on the UI thread. Writes happen ONLY on the UI thread; other threads queue
+/// (see <see cref="WriteLine"/> for the VS 2022 startup deadlock that rule prevents).
 /// </summary>
 internal sealed class VsOutputLog
 {
@@ -37,15 +37,50 @@ internal sealed class VsOutputLog
         return new VsOutputLog(pane);
     }
 
+    private readonly ConcurrentQueue<string> _pending = new();
+    private int _flushScheduled;
+
+    /// <summary>
+    /// Never blocks the calling thread. Off the UI thread the line is queued and written by a UI-thread
+    /// flush. "OutputStringThreadSafe" is only thread-safe once you HAVE an interface pointer for your
+    /// thread: on VS 2022 the pane is an STA object, so the very first call from a pool thread has to
+    /// marshal through the UI thread (GetCOMIPFromRCW) - and while VS restores a docked Claude Code panel
+    /// at startup, the UI thread sits in a no-pump synchronous wait for this package to load. Background
+    /// logging from BridgeHost.StartAsync then deadlocked VS on launch (seen live on 17.10; VS 2026's pane
+    /// happens not to need the marshal).
+    /// </summary>
     public void WriteLine(PLogLevel level, string message)
     {
         var line = $"[{level.ToString().ToLowerInvariant()}] {message}{Environment.NewLine}";
-        // OutputStringThreadSafe is the documented thread-safe entry point, so the off-thread WS loop
-        // can call it directly. VSTHRD010 flags all IVsOutputWindowPane members as main-thread-only and
-        // can't see that exception - suppress it locally.
-#pragma warning disable VSTHRD010
-        _pane.OutputStringThreadSafe(line);
-#pragma warning restore VSTHRD010
+        if (ThreadHelper.CheckAccess())
+        {
+            Flush(); // keep order: anything queued from other threads goes first
+            Write(line);
+            return;
+        }
+
+        _pending.Enqueue(line);
+        if (Interlocked.Exchange(ref _flushScheduled, 1) == 0)
+        {
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Interlocked.Exchange(ref _flushScheduled, 0); // before draining, so a racing enqueue reschedules
+                Flush();
+            });
+        }
+    }
+
+    private void Flush()
+    {
+        while (_pending.TryDequeue(out var queued)) Write(queued);
+    }
+
+    private void Write(string line)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try { _pane.OutputStringThreadSafe(line); }
+        catch { /* the log must never take the caller down */ }
     }
 
     /// <summary>Bring this pane forward in the Output window. Must be called on the UI thread.</summary>

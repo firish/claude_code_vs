@@ -158,6 +158,16 @@ internal static class SessionWindows
         lock (Gate) Prune();
     }
 
+    /// <summary>Every session id currently open through this registry - one prune for a whole list.</summary>
+    public static HashSet<string> OpenIds()
+    {
+        lock (Gate)
+        {
+            Prune();
+            return new HashSet<string>(Entries.Where(e => e.Id != null).Select(e => e.Id!), StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
     public static Presence Check(string sessionId)
     {
         lock (Gate)

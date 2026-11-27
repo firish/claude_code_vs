@@ -59,4 +59,10 @@ internal static class ExternalSessions
     {
         lock (Gate) return _last.Contains(sessionId);
     }
+
+    /// <summary>The ids found by the last <see cref="Scan"/> (a copy).</summary>
+    public static HashSet<string> LastScan()
+    {
+        lock (Gate) return new HashSet<string>(_last, StringComparer.OrdinalIgnoreCase);
+    }
 }

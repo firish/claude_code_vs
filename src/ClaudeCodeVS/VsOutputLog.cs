@@ -83,10 +83,24 @@ internal sealed class VsOutputLog
         catch { /* the log must never take the caller down */ }
     }
 
-    /// <summary>Bring this pane forward in the Output window. Must be called on the UI thread.</summary>
+    /// <summary>
+    /// Show the Output tool window and bring this pane forward in it. UI thread. The pane's own Activate
+    /// only selects it INSIDE the Output window - with that window closed or behind another tab, nothing
+    /// visible happened, so the window frame is shown first.
+    /// </summary>
     public void Activate()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (Package.GetGlobalService(typeof(SVsUIShell)) is IVsUIShell shell)
+            {
+                var outputWindow = Microsoft.VisualStudio.VSConstants.StandardToolWindows.Output;
+                if (Microsoft.VisualStudio.ErrorHandler.Succeeded(shell.FindToolWindow((uint)__VSFINDTOOLWIN.FTW_fForceCreate, ref outputWindow, out var frame)))
+                    frame?.Show();
+            }
+        }
+        catch { /* the pane selection below is still worth doing */ }
         _pane.Activate();
     }
 }

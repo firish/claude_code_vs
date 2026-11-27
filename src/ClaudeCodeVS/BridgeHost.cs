@@ -136,7 +136,7 @@ internal sealed class BridgeHost : IDisposable
                         var ws = await GetWorkspaceRootAsync();
                         if (!string.IsNullOrEmpty(ws))
                         {
-                            Hooks.PermissionHookInstaller.EnsureInstalled(ws!);
+                            Hooks.PermissionHookInstaller.EnsureInstalled(ws!, Ui.BridgeStatus.UsageStatusLine);
                             Hooks.McpInstaller.EnsureInstalled(ws!);
                         }
                     }
@@ -181,6 +181,12 @@ internal sealed class BridgeHost : IDisposable
         };
         _server.CliConnected = pid => Sessions.SessionWindows.CliConnected(pid);
         _server.CliDisconnected = pid => Sessions.SessionWindows.CliDisconnected(pid);
+
+        // Usage row: the session's status line (vs-statusline.ps1) relays the CLI's rate_limits here.
+        _server.RateLimitsReceived = rateLimits =>
+        {
+            if (Ui.UsageLimits.Parse(rateLimits) is { } limits) Ui.BridgeStatus.SetLimits(limits);
+        };
 
         // Stats: the Stop hook POSTs the transcript path to /usage; we parse it for tokens/cost.
         _server.UsageHandler = UsageTracker.UpdateFromTranscriptAsync;
@@ -453,6 +459,14 @@ internal sealed class BridgeHost : IDisposable
             var summary = Edits.EditHunks.Compute(beforeContents, newContents);
             var rows = Edits.EditEntry.From(filePath, summary);
             if (rows.Count == 0) return;
+
+            // Keep the before/after texts for the EDITS tab's "Show diff" (one object shared by the rows).
+            var before = beforeContents ?? "";
+            if (before.Length <= Edits.EditSnapshot.MaxChars && newContents.Length <= Edits.EditSnapshot.MaxChars)
+            {
+                var snapshot = new Edits.EditSnapshot(before, newContents);
+                foreach (var row in rows) row.Snapshot = snapshot;
+            }
 
             Ui.BridgeStatus.RecordEdits(rows); // panel: this turn, compact
 
@@ -881,7 +895,7 @@ internal sealed class BridgeHost : IDisposable
         // Also register the debug PULL MCP server (.mcp.json + stdio shim) for Phase 2 pull-on-demand.
         if (!string.IsNullOrEmpty(workspace))
         {
-            Hooks.PermissionHookInstaller.EnsureInstalled(workspace!);
+            Hooks.PermissionHookInstaller.EnsureInstalled(workspace!, Ui.BridgeStatus.UsageStatusLine);
             Hooks.McpInstaller.EnsureInstalled(workspace!);
         }
 

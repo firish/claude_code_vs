@@ -103,6 +103,7 @@
     <EmbeddedResource Include="Hooks\vs-usage-hook.ps1" />
     <EmbeddedResource Include="Hooks\vs-debug-context-hook.ps1" />
     <EmbeddedResource Include="Hooks\vs-notify-hook.ps1" />
+    <EmbeddedResource Include="Hooks\vs-statusline.ps1" />
     <!-- Phase 2 debug PULL channel: the stdio MCP shim, registered in .mcp.json (see McpInstaller). -->
     <EmbeddedResource Include="Hooks\vs-mcp-shim.ps1" />
   </ItemGroup>

@@ -50,6 +50,7 @@ internal static class Strings
     internal static string SessionMenuRename => S(nameof(SessionMenuRename));
     internal static string FeedMenuCopy => S(nameof(FeedMenuCopy));
     internal static string FeedMenuSelectAll => S(nameof(FeedMenuSelectAll));
+    internal static string FeedMenuWrap => S(nameof(FeedMenuWrap));
     internal static string SessionMenuDelete => S(nameof(SessionMenuDelete));
     internal static string SessionDeleteTitle => S(nameof(SessionDeleteTitle));
     internal static string SessionDeleteConfirmFormat => S(nameof(SessionDeleteConfirmFormat));
@@ -57,6 +58,45 @@ internal static class Strings
     internal static string RenameTitle => S(nameof(RenameTitle));
     internal static string RenamePrompt => S(nameof(RenamePrompt));
     internal static string BtnRenameOk => S(nameof(BtnRenameOk));
+    // ---- Panel: tabs / layout ----
+    internal static string TabEdits => S(nameof(TabEdits));
+    internal static string EditsEmpty => S(nameof(EditsEmpty));
+    internal static string TipSplitter => S(nameof(TipSplitter));
+    internal static string TipSettings => S(nameof(TipSettings));
+    internal static string ToggleUsage => S(nameof(ToggleUsage));
+    internal static string TipUsageToggle => S(nameof(TipUsageToggle));
+
+    // ---- Panel: subscription usage row ----
+    internal static string UsageFiveHourLabel => S(nameof(UsageFiveHourLabel));
+    internal static string UsageSevenDayLabel => S(nameof(UsageSevenDayLabel));
+    internal static string UsageSpendLabel => S(nameof(UsageSpendLabel));
+
+    // ---- Panel: activity feed options ----
+    internal static string FeedMenuTimestamps => S(nameof(FeedMenuTimestamps));
+    internal static string FeedMenuWarningsOnly => S(nameof(FeedMenuWarningsOnly));
+
+    // ---- Panel: EDITS tab ----
+    internal static string TipEditsTurn => S(nameof(TipEditsTurn));
+    internal static string EditsTurnCurrentFormat => S(nameof(EditsTurnCurrentFormat));
+    internal static string EditsTurnPastFormat => S(nameof(EditsTurnPastFormat));
+    internal static string EditsMenuOpen => S(nameof(EditsMenuOpen));
+    internal static string EditsMenuShowDiff => S(nameof(EditsMenuShowDiff));
+    internal static string EditsLineFormat => S(nameof(EditsLineFormat));
+    internal static string EditsDiffCaptionFormat => S(nameof(EditsDiffCaptionFormat));
+    internal static string EditsDiffBeforeFormat => S(nameof(EditsDiffBeforeFormat));
+    internal static string EditsDiffAfterFormat => S(nameof(EditsDiffAfterFormat));
+
+    // ---- Panel: SESSIONS tab ----
+    internal static string SessionsOpenCountFormat => S(nameof(SessionsOpenCountFormat));
+    internal static string SessionsNoMatch => S(nameof(SessionsNoMatch));
+    internal static string SessionsFilterHint => S(nameof(SessionsFilterHint));
+    internal static string SessionsGroupToday => S(nameof(SessionsGroupToday));
+    internal static string SessionsGroupYesterday => S(nameof(SessionsGroupYesterday));
+    internal static string SessionsGroupThisWeek => S(nameof(SessionsGroupThisWeek));
+    internal static string SessionsGroupEarlier => S(nameof(SessionsGroupEarlier));
+    internal static string SessionPreviewYou => S(nameof(SessionPreviewYou));
+    internal static string UsageResetsFormat => S(nameof(UsageResetsFormat));
+    internal static string UsageTooltip => S(nameof(UsageTooltip));
     internal static string SessionsEmpty => S(nameof(SessionsEmpty));
     internal static string SessionActive => S(nameof(SessionActive));
 
@@ -92,7 +132,6 @@ internal static class Strings
 
     // ---- Panel: the "Edits this turn" jump list (issue #44) ----
     internal static string EditsLabel => S(nameof(EditsLabel));
-    internal static string EditsCountFormat => S(nameof(EditsCountFormat));
     internal static string EditsRewrittenFormat => S(nameof(EditsRewrittenFormat));
     internal static string EditsTooltipFormat => S(nameof(EditsTooltipFormat));
     internal static string EditsTooltipRewritten => S(nameof(EditsTooltipRewritten));

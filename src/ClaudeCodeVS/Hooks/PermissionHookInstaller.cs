@@ -22,6 +22,9 @@ internal static class PermissionHookInstaller
     private const string UsageScript = "vs-usage-hook.ps1";
     private const string DebugScript = "vs-debug-context-hook.ps1";
     private const string NotifyScript = "vs-notify-hook.ps1";
+    private const string StatusLineScript = "vs-statusline.ps1";
+    /// <summary>The user's own statusLine, which our status line runs and passes through.</summary>
+    private const string StatusLineInnerFile = "vs-statusline-inner.json";
     private const int PermissionTimeoutSeconds = 86400; // 24h, so the diff can wait for an unattended user
     private const int UsageTimeoutSeconds = 10;
     private const int DebugTimeoutSeconds = 10;
@@ -44,7 +47,9 @@ internal static class PermissionHookInstaller
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
         + $"\"if (Test-Path '.claude/{script}') {{ & '.claude/{script}' }} elseif (Test-Path '$CLAUDE_PROJECT_DIR/.claude/{script}') {{ & '$CLAUDE_PROJECT_DIR/.claude/{script}' }} else {{ exit 0 }}\"";
 
-    public static void EnsureInstalled(string workspaceRoot)
+    /// <param name="usageStatusLine">Install our statusLine (the panel's usage row). False removes it and
+    /// restores the user's own - the panel's "Show subscription usage" toggle.</param>
+    public static void EnsureInstalled(string workspaceRoot, bool usageStatusLine = true)
     {
         try
         {
@@ -57,6 +62,7 @@ internal static class PermissionHookInstaller
             ManagedScripts.WriteIfManaged(Path.Combine(claudeDir, UsageScript), ReadEmbeddedScript(UsageScript));
             ManagedScripts.WriteIfManaged(Path.Combine(claudeDir, DebugScript), ReadEmbeddedScript(DebugScript));
             ManagedScripts.WriteIfManaged(Path.Combine(claudeDir, NotifyScript), ReadEmbeddedScript(NotifyScript));
+            ManagedScripts.WriteIfManaged(Path.Combine(claudeDir, StatusLineScript), ReadEmbeddedScript(StatusLineScript));
 
             // Older versions wrote into the shared settings.json; our hooks are per-machine, so move them out.
             RemoveLegacyHooks(Path.Combine(claudeDir, "settings.json"));
@@ -92,20 +98,125 @@ internal static class PermissionHookInstaller
             bool addedStop = EnsureHook(hooks, "Stop", matcher: null, UsageScript, UsageTimeoutSeconds);
             bool addedDebug = EnsureHook(hooks, "UserPromptSubmit", matcher: null, DebugScript, DebugTimeoutSeconds);
             bool addedNotify = EnsureHook(hooks, "Notification", matcher: null, NotifyScript, NotifyTimeoutSeconds);
+            bool changedStatusLine = EnsureStatusLine(root, claudeDir, usageStatusLine);
 
-            if (!addedPre && !addedStop && !addedDebug && !addedNotify)
+            if (!addedPre && !addedStop && !addedDebug && !addedNotify && !changedStatusLine)
             {
-                Log.Info("hooks: PreToolUse + Stop + UserPromptSubmit + Notification already present; nothing to change");
+                Log.Info("hooks: PreToolUse + Stop + UserPromptSubmit + Notification + statusLine already present; nothing to change");
                 return;
             }
 
             File.WriteAllText(settingsPath, root.ToString(Formatting.Indented));
-            Log.Info($"hooks: updated {settingsPath} (PreToolUse {(addedPre ? "added/updated" : "present")}, Stop {(addedStop ? "added/updated" : "present")}, UserPromptSubmit {(addedDebug ? "added/updated" : "present")}, Notification {(addedNotify ? "added/updated" : "present")})");
+            Log.Info($"hooks: updated {settingsPath} (PreToolUse {(addedPre ? "added/updated" : "present")}, Stop {(addedStop ? "added/updated" : "present")}, UserPromptSubmit {(addedDebug ? "added/updated" : "present")}, Notification {(addedNotify ? "added/updated" : "present")}, statusLine {(changedStatusLine ? "added/updated" : "present")})");
         }
         catch (Exception e)
         {
             Log.Warn($"hook install failed: {e.Message}");
         }
+    }
+
+    /// <summary>
+    /// Point the session's statusLine at our script. The status line is the only place the CLI hands the
+    /// subscription usage windows (rate_limits) to an outside process, so that is where the panel's usage
+    /// row comes from. There is only ONE statusLine and settings.local.json outranks the project and user
+    /// files, so installing ours would hide a status line the user already has - instead we remember theirs
+    /// in vs-statusline-inner.json and our script runs it with the same input and prints its output.
+    /// Where theirs comes from, in the CLI's own precedence: an existing non-ours entry in
+    /// settings.local.json (remembered once, since we then overwrite it), else project settings.json, else
+    /// the user's ~/.claude/settings.json - the last two re-read on every install, so edits to them follow.
+    /// Returns true if <paramref name="localRoot"/> changed.
+    /// </summary>
+    private static bool EnsureStatusLine(JObject localRoot, string claudeDir, bool enabled)
+    {
+        try
+        {
+            var current = localRoot["statusLine"] as JObject;
+            var currentCommand = (string?)current?["command"];
+            bool isOurs = currentCommand != null && currentCommand.IndexOf(StatusLineScript, StringComparison.OrdinalIgnoreCase) >= 0;
+
+            var innerPath = Path.Combine(claudeDir, StatusLineInnerFile);
+            if (!enabled) return RemoveStatusLine(localRoot, innerPath, isOurs);
+            JObject? inner;
+            if (current != null && !isOurs)
+                inner = InnerFrom(current, "local");
+            else if (ReadJson(innerPath) is { } remembered && (string?)remembered["source"] == "local")
+                inner = remembered;
+            else
+            {
+                var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+                if (string.IsNullOrEmpty(configDir))
+                    configDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+                inner = InnerFrom(ReadJson(Path.Combine(claudeDir, "settings.json"))?["statusLine"] as JObject, "project")
+                     ?? InnerFrom(ReadJson(Path.Combine(configDir!, "settings.json"))?["statusLine"] as JObject, "user");
+            }
+
+            // Keep the pass-through file in step: written when there is a command to run, removed when not.
+            if (inner != null)
+            {
+                var text = inner.ToString(Formatting.Indented);
+                if (!File.Exists(innerPath) || File.ReadAllText(innerPath) != text)
+                    File.WriteAllText(innerPath, text);
+            }
+            else if (File.Exists(innerPath))
+                File.Delete(innerPath);
+
+            var desired = new JObject { ["type"] = "command", ["command"] = Command(StatusLineScript) };
+            if (inner?["padding"] is JValue padding) desired["padding"] = padding.DeepClone();
+            if (current != null && JToken.DeepEquals(current, desired)) return false;
+            localRoot["statusLine"] = desired;
+            return true;
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"hooks: statusLine install failed: {e.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The panel's usage toggle is off: take our statusLine out and put things back as they were - the
+    /// user's own entry returns to settings.local.json if that is where it came from; otherwise the key is
+    /// simply removed and their project/user status line applies again. Returns true if the root changed.
+    /// </summary>
+    private static bool RemoveStatusLine(JObject localRoot, string innerPath, bool isOurs)
+    {
+        if (!isOurs) return false; // nothing of ours installed (or the user's own entry is in place)
+        var remembered = ReadJson(innerPath);
+        if (remembered != null && (string?)remembered["source"] == "local" && remembered["command"] is JValue command)
+        {
+            var restored = new JObject { ["type"] = "command", ["command"] = command.DeepClone() };
+            if (remembered["padding"] is JValue padding) restored["padding"] = padding.DeepClone();
+            localRoot["statusLine"] = restored;
+        }
+        else
+        {
+            localRoot.Remove("statusLine");
+        }
+        try { if (File.Exists(innerPath)) File.Delete(innerPath); } catch { /* best-effort */ }
+        return true;
+    }
+
+    /// <summary>A user statusLine entry as the pass-through record, or null if it isn't a runnable command
+    /// (or is ours, which must never wrap itself).</summary>
+    private static JObject? InnerFrom(JObject? statusLine, string source)
+    {
+        var command = (string?)statusLine?["command"];
+        if (string.IsNullOrWhiteSpace(command) || command!.IndexOf(StatusLineScript, StringComparison.OrdinalIgnoreCase) >= 0)
+            return null;
+        var inner = new JObject { ["command"] = command, ["source"] = source };
+        if (statusLine!["padding"] is JValue padding) inner["padding"] = padding.DeepClone();
+        return inner;
+    }
+
+    private static JObject? ReadJson(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                ? JObject.Parse(File.ReadAllText(path), new JsonLoadSettings { CommentHandling = CommentHandling.Ignore })
+                : null;
+        }
+        catch { return null; }
     }
 
     /// <summary>Strips our hook entries (matched by script name) from the legacy shared settings.json,

@@ -39,9 +39,15 @@ internal static class SessionStore
         return sb.ToString();
     }
 
+    /// <summary>Tests point this at a scratch folder; null = the real ~/.claude.</summary>
+    internal static string? ClaudeDirOverride { get; set; }
+
+    private static string ClaudeDir =>
+        ClaudeDirOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+
     private static string? FindProjectDir(string workspace)
     {
-        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects");
+        var root = Path.Combine(ClaudeDir, "projects");
         if (!Directory.Exists(root)) return null;
         var want = EncodeWorkspace(workspace.TrimEnd('\\', '/'));
         // Case-insensitive: VS launches with "C:", other tools with "c:" (the same drift as the trust-key twins).
@@ -135,7 +141,7 @@ internal static class SessionStore
         // The id becomes a path segment: only the CLI's own id alphabet, never a separator or "..".
         if (!System.Text.RegularExpressions.Regex.IsMatch(id ?? "", "^[A-Za-z0-9][A-Za-z0-9-]*$")) return 0;
 
-        var claude = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        var claude = ClaudeDir;
         var targets = new List<string>();
         var projects = Path.Combine(claude, "projects");
         if (Directory.Exists(projects))
@@ -165,6 +171,59 @@ internal static class SessionStore
                 Cache.Remove(key);
         Log.Info($"sessions: deleted session {id} ({removed} item(s))");
         return removed;
+    }
+
+    /// <summary>
+    /// The conversation's last exchange for the SESSIONS tooltip: the last real user prompt and the last
+    /// assistant text, each trimmed to one short line. Reads only the transcript's tail. Never throws.
+    /// </summary>
+    public static (string? Prompt, string? Answer) Preview(string? workspace, string id)
+    {
+        // Big enough to reach back past a long run of tool output to the turn's prompt.
+        const int TailBytes = 2 * 1024 * 1024;
+        const int MaxChars = 200;
+        try
+        {
+            var path = TranscriptPath(workspace, id);
+            if (path == null || !File.Exists(path)) return (null, null);
+            string? prompt = null, answer = null;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (fs.Length > TailBytes) fs.Seek(-TailBytes, SeekOrigin.End);
+            using var reader = new StreamReader(fs, Encoding.UTF8);
+            string? line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                if (line.IndexOf("\"type\":\"user\"", StringComparison.Ordinal) >= 0 && line.IndexOf("tool_result", StringComparison.Ordinal) < 0)
+                    prompt = PromptText(line) ?? prompt;
+                else if (line.IndexOf("\"type\":\"assistant\"", StringComparison.Ordinal) >= 0)
+                    answer = AssistantText(line) ?? answer;
+            }
+            return (Short(prompt, MaxChars), Short(answer, MaxChars));
+        }
+        catch { return (null, null); }
+    }
+
+    private static string? AssistantText(string json)
+    {
+        try
+        {
+            var o = JObject.Parse(json);
+            if ((bool?)o["isSidechain"] == true) return null;
+            if (o["message"]?["content"] is not JArray content) return null;
+            var text = string.Join(" ", content.OfType<JObject>()
+                .Where(b => (string?)b["type"] == "text")
+                .Select(b => ((string?)b["text"] ?? "").Trim())
+                .Where(t => t.Length > 0));
+            return text.Length > 0 ? text : null;
+        }
+        catch { return null; }
+    }
+
+    private static string? Short(string? text, int max)
+    {
+        if (text == null) return null;
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        return text.Length <= max ? text : text.Substring(0, max - 1) + "…";
     }
 
     /// <summary>The session's display title, or null when it has none yet (never the bare id).</summary>
@@ -244,13 +303,17 @@ internal static class SessionStore
             var o = JObject.Parse(json);
             if ((bool?)o["isSidechain"] == true || (bool?)o["isMeta"] == true) return null;
             var content = o["message"]?["content"];
-            string? text = content is JValue v ? (string?)v
-                : content is JArray a ? a.OfType<JObject>().Where(b => (string?)b["type"] == "text").Select(b => (string?)b["text"]).FirstOrDefault()
+            // Command wrappers, caveats, IDE-selection and system-reminder blocks all start with '<' and are
+            // not what the user typed; an IDE-connected prompt often carries one BEFORE the typed text, so
+            // take the first text block that isn't one, rather than giving up on the first block.
+            static bool Typed(string? t) => !string.IsNullOrEmpty(t) && t![0] != '<';
+            string? text = content is JValue v ? ((string?)v)?.Trim()
+                : content is JArray a ? a.OfType<JObject>()
+                    .Where(b => (string?)b["type"] == "text")
+                    .Select(b => ((string?)b["text"])?.Trim())
+                    .FirstOrDefault(Typed)
                 : null;
-            text = text?.Trim();
-            // Command wrappers / caveats / hook echoes are not what the user typed.
-            if (string.IsNullOrEmpty(text) || text![0] == '<') return null;
-            return text;
+            return Typed(text) ? text : null;
         }
         catch { return null; }
     }

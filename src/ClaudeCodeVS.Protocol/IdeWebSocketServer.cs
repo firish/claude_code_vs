@@ -189,7 +189,7 @@ public sealed class IdeWebSocketServer
         {
             var path = ctx.Request.Url?.AbsolutePath;
             bool isPost = string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase);
-            if (isPost && path is "/permission" or "/usage" or "/notify" or "/debug-context")
+            if (isPost && path is "/permission" or "/usage" or "/notify" or "/debug-context" or "/statusline")
             {
                 // Read + parse the body ONCE here: the ownership gate needs the hook's cwd, and the
                 // request stream cannot be re-read by the handlers.
@@ -211,6 +211,14 @@ public sealed class IdeWebSocketServer
                 {
                     Log.Info($"hook POST {path} ignored: session cwd '{foreignCwd}' is outside this workspace");
                     await RespondForeignAsync(ctx, path!, ct);
+                    return;
+                }
+
+                // The status line posts on every CLI status refresh - far more often than any hook. It only
+                // needs the ownership gate above; the observers below are per-turn work it must not repeat.
+                if (path == "/statusline")
+                {
+                    HandleStatusLineRequest(ctx, body);
                     return;
                 }
 
@@ -513,6 +521,27 @@ public sealed class IdeWebSocketServer
             Log.Warn($"usage request failed: {e.Message}");
         }
         try { ctx.Response.StatusCode = 200; ctx.Response.Close(); } catch { /* client gave up */ }
+    }
+
+    /// <summary>
+    /// Raised with the CLI's <c>rate_limits</c> object (five_hour / seven_day / spend_limit windows) each
+    /// time the owned session's status line reports it - vs-statusline.ps1 posts it to /statusline.
+    /// </summary>
+    public Action<JObject>? RateLimitsReceived { get; set; }
+
+    private void HandleStatusLineRequest(HttpListenerContext ctx, JObject o)
+    {
+        // Answer first: the status-line script is on the CLI's render path and gets cancelled by the next
+        // update, so it must never wait on the panel.
+        try { ctx.Response.StatusCode = 200; ctx.Response.Close(); } catch { /* client gave up */ }
+        try
+        {
+            if (o["rate_limits"] is JObject limits) RateLimitsReceived?.Invoke(limits);
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"statusline request failed: {e.Message}");
+        }
     }
 
     private async Task HandleNotifyRequestAsync(HttpListenerContext ctx, JObject o, CancellationToken ct)

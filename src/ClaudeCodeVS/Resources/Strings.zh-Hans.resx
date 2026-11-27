@@ -39,6 +39,59 @@
   <data name="BtnRelaunch" xml:space="preserve">
     <value>重新启动 Claude Code</value>
   </data>
+  <data name="SessionsHeader" xml:space="preserve">
+    <value>会话</value>
+  </data>
+  <data name="BtnSessionsRefresh" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="BtnSessionsNew" xml:space="preserve">
+    <value>新建</value>
+  </data>
+  <data name="TipSessionResume" xml:space="preserve">
+    <value>双击可恢复此会话</value>
+  </data>
+  <data name="SessionMenuSwitch" xml:space="preserve">
+    <value>切换到会话</value>
+  </data>
+  <data name="SessionMenuRename" xml:space="preserve">
+    <value>重命名…</value>
+  </data>
+  <data name="FeedMenuCopy" xml:space="preserve">
+    <value>复制</value>
+  </data>
+  <data name="FeedMenuSelectAll" xml:space="preserve">
+    <value>全选</value>
+  </data>
+  <data name="SessionMenuDelete" xml:space="preserve">
+    <value>删除…</value>
+  </data>
+  <data name="SessionDeleteTitle" xml:space="preserve">
+    <value>删除会话</value>
+  </data>
+  <data name="SessionDeleteConfirmFormat" xml:space="preserve">
+    <value>要删除会话“{0}”吗？
+
+其记录、文件历史和其他会话数据将被永久删除，且无法撤销。</value>
+  </data>
+  <data name="SessionDeleteOpen" xml:space="preserve">
+    <value>此会话正在终端中打开。请先在那里退出 Claude Code，然后再删除。</value>
+  </data>
+  <data name="RenameTitle" xml:space="preserve">
+    <value>重命名会话</value>
+  </data>
+  <data name="RenamePrompt" xml:space="preserve">
+    <value>此会话的新名称：</value>
+  </data>
+  <data name="BtnRenameOk" xml:space="preserve">
+    <value>重命名</value>
+  </data>
+  <data name="SessionsEmpty" xml:space="preserve">
+    <value>此工作区还没有已保存的会话。</value>
+  </data>
+  <data name="SessionActive" xml:space="preserve">
+    <value>活动</value>
+  </data>
 
   <!-- Panel: toggles -->
   <data name="ToggleAutoAccept" xml:space="preserve">

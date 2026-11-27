@@ -58,6 +58,12 @@ internal static class TranscriptTail
         _ = Task.Run(() => LoopAsync(token), token);
     }
 
+    /// <summary>The transcript of the session the hooks last reported (null until a hook fires / after Abort).</summary>
+    public static string? CurrentPath
+    {
+        get { lock (Gate) return _path; }
+    }
+
     /// <summary>The turn ended (Stop hook): read whatever landed last, then stop polling.</summary>
     public static void Stop()
     {

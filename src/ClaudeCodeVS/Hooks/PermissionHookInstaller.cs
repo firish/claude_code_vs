@@ -9,7 +9,7 @@ namespace ClaudeCodeVs.Hooks;
 
 /// <summary>
 /// Installs the extension's hooks into a workspace's .claude/ folder: writes the embedded hook scripts
-/// and merges entries into .claude/settings.json (preserving everything else; idempotent). Called from
+/// and merges entries into .claude/settings.local.json (preserving everything else; idempotent). Called from
 /// the Launch command. Best-effort - never throws into the launch path.
 /// - PreToolUse (Edit|Write|MultiEdit) -> the single-gate permission hook (our diff is the edit gate).
 /// - Stop -> the usage hook (reports the transcript path so the panel can show token/cost stats).
@@ -58,8 +58,11 @@ internal static class PermissionHookInstaller
             ManagedScripts.WriteIfManaged(Path.Combine(claudeDir, DebugScript), ReadEmbeddedScript(DebugScript));
             ManagedScripts.WriteIfManaged(Path.Combine(claudeDir, NotifyScript), ReadEmbeddedScript(NotifyScript));
 
-            // 2) Merge hook entries into .claude/settings.json, preserving any existing content.
-            var settingsPath = Path.Combine(claudeDir, "settings.json");
+            // Older versions wrote into the shared settings.json; our hooks are per-machine, so move them out.
+            RemoveLegacyHooks(Path.Combine(claudeDir, "settings.json"));
+
+            // 2) Merge hook entries into .claude/settings.local.json (personal, not committed), preserving any existing content.
+            var settingsPath = Path.Combine(claudeDir, "settings.local.json");
             JObject root;
             if (File.Exists(settingsPath))
             {
@@ -102,6 +105,59 @@ internal static class PermissionHookInstaller
         catch (Exception e)
         {
             Log.Warn($"hook install failed: {e.Message}");
+        }
+    }
+
+    /// <summary>Strips our hook entries (matched by script name) from the legacy shared settings.json,
+    /// pruning emptied containers; leaves the file untouched if nothing of ours is there.</summary>
+    private static void RemoveLegacyHooks(string legacyPath)
+    {
+        try
+        {
+            if (!File.Exists(legacyPath)) return;
+            JObject root;
+            try { root = JObject.Parse(File.ReadAllText(legacyPath), new JsonLoadSettings { CommentHandling = CommentHandling.Load }); }
+            catch { return; }
+            if (root["hooks"] is not JObject hooks) return;
+
+            // Rewriting would silently drop the user's comments (issue #49) - leave such a file alone.
+            if (root.DescendantsAndSelf().Any(t => t.Type == JTokenType.Comment))
+            {
+                Log.Warn($"hooks: {legacyPath} contains comments; not rewriting it, remove our old hook entries from it manually");
+                return;
+            }
+
+            var scripts = new[] { PermissionScript, UsageScript, DebugScript, NotifyScript };
+            bool changed = false;
+            foreach (var prop in hooks.Properties().ToList())
+            {
+                if (prop.Value is not JArray arr) continue;
+                foreach (var entry in arr.OfType<JObject>().ToList())
+                {
+                    if (entry["hooks"] is not JArray hs) continue;
+                    foreach (var h in hs.OfType<JObject>().ToList())
+                    {
+                        var cmd = (string?)h["command"];
+                        if (cmd != null && scripts.Any(s => cmd.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            h.Remove();
+                            changed = true;
+                        }
+                    }
+                    if (hs.Count == 0) entry.Remove();
+                }
+                if (arr.Count == 0) prop.Remove();
+            }
+            if (!changed) return;
+            if (hooks.Count == 0) root.Remove("hooks");
+
+            if (root.Count == 0) File.Delete(legacyPath);
+            else File.WriteAllText(legacyPath, root.ToString(Formatting.Indented));
+            Log.Info($"hooks: migrated our entries out of {legacyPath}");
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"hooks: legacy settings.json cleanup failed: {e.Message}");
         }
     }
 

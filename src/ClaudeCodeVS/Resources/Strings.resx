@@ -37,6 +37,59 @@
   <data name="BtnRelaunch" xml:space="preserve">
     <value>Relaunch Claude Code</value>
   </data>
+  <data name="SessionsHeader" xml:space="preserve">
+    <value>Sessions</value>
+  </data>
+  <data name="BtnSessionsRefresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="BtnSessionsNew" xml:space="preserve">
+    <value>New</value>
+  </data>
+  <data name="TipSessionResume" xml:space="preserve">
+    <value>Double-click to resume this session</value>
+  </data>
+  <data name="SessionMenuSwitch" xml:space="preserve">
+    <value>Switch to session</value>
+  </data>
+  <data name="SessionMenuRename" xml:space="preserve">
+    <value>Rename…</value>
+  </data>
+  <data name="FeedMenuCopy" xml:space="preserve">
+    <value>Copy</value>
+  </data>
+  <data name="FeedMenuSelectAll" xml:space="preserve">
+    <value>Select all</value>
+  </data>
+  <data name="SessionMenuDelete" xml:space="preserve">
+    <value>Delete…</value>
+  </data>
+  <data name="SessionDeleteTitle" xml:space="preserve">
+    <value>Delete session</value>
+  </data>
+  <data name="SessionDeleteConfirmFormat" xml:space="preserve">
+    <value>Delete the session "{0}"?
+
+Its transcript, file history and other session data will be removed permanently. This cannot be undone.</value>
+  </data>
+  <data name="SessionDeleteOpen" xml:space="preserve">
+    <value>This session is open in a terminal. Exit Claude Code there first, then delete it.</value>
+  </data>
+  <data name="RenameTitle" xml:space="preserve">
+    <value>Rename session</value>
+  </data>
+  <data name="RenamePrompt" xml:space="preserve">
+    <value>New name for this session:</value>
+  </data>
+  <data name="BtnRenameOk" xml:space="preserve">
+    <value>Rename</value>
+  </data>
+  <data name="SessionsEmpty" xml:space="preserve">
+    <value>No saved sessions for this workspace yet.</value>
+  </data>
+  <data name="SessionActive" xml:space="preserve">
+    <value>active</value>
+  </data>
 
   <!-- Panel: toggles -->
   <data name="ToggleAutoAccept" xml:space="preserve">

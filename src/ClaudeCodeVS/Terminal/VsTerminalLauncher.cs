@@ -8,7 +8,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClaudeCodeVs.Protocol;
 using Microsoft.ServiceHub.Framework;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Shell.ServiceBroker;
 
 namespace ClaudeCodeVs.Terminal;
@@ -32,7 +34,7 @@ internal static class VsTerminalLauncher
     /// <summary>How long the native-terminal attempt may take before the external console takes over.</summary>
     private const int LaunchTimeoutMs = 10_000;
 
-    public static async Task<bool> TryLaunchAsync(string? workingDirectory, int ssePort, CancellationToken ct)
+    public static async Task<bool> TryLaunchAsync(string? workingDirectory, int ssePort, CancellationToken ct, string? claudeArgs = null, string? tabName = null)
     {
         try
         {
@@ -42,7 +44,7 @@ internal static class VsTerminalLauncher
             // already cancelled it (so a late completion aborts instead of opening a second terminal).
             var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(LaunchTimeoutMs);
-            Task<bool> attempt = TryLaunchCoreAsync(workingDirectory, ssePort, timeoutCts.Token);
+            Task<bool> attempt = TryLaunchCoreAsync(workingDirectory, ssePort, timeoutCts.Token, claudeArgs, tabName);
             _ = attempt.ContinueWith(t => { _ = t.Exception; timeoutCts.Dispose(); }, TaskScheduler.Default);
 
             // The grace over CancelAfter lets a cancellation-honoring call surface as a clean
@@ -62,7 +64,7 @@ internal static class VsTerminalLauncher
         }
     }
 
-    private static async Task<bool> TryLaunchCoreAsync(string? workingDirectory, int ssePort, CancellationToken ct)
+    private static async Task<bool> TryLaunchCoreAsync(string? workingDirectory, int ssePort, CancellationToken ct, string? claudeArgs, string? tabName)
     {
         try
         {
@@ -122,6 +124,7 @@ internal static class VsTerminalLauncher
                 // /K keeps the window open after claude exits (parity with today's cmd.exe path); env vars are
                 // baked into an inline `set` chain since TerminalWindowOptions has no EnvironmentVariables property.
                 string args = $"/K set ENABLE_IDE_INTEGRATION=true&&set CLAUDE_CODE_SSE_PORT={ssePort}&&claude"
+                            + (string.IsNullOrEmpty(claudeArgs) ? "" : " " + claudeArgs)
                             + (Ui.BridgeStatus.AutoAcceptEdits ? " --permission-mode acceptEdits" : ""); // run-wild at launch: see BridgeHost.LaunchClaudeAsync
                 profile = profileCtor.Invoke(new object?[] { "Claude Code", "cmd.exe", args, false });
 
@@ -142,10 +145,12 @@ internal static class VsTerminalLauncher
 
                 object? guidResult;
                 string surface;
+                string name = CaptionOf(string.IsNullOrWhiteSpace(tabName) ? "Claude Code" : tabName!);
+                var framesBefore = SnapshotToolFrames();
                 if (create != null)
                 {
                     object options = Activator.CreateInstance(windowOptionsType!)!; // ctor already defaults Focus/AllowUserInput/AutoResize=true
-                    windowOptionsType!.GetProperty("Name")?.SetValue(options, "Claude Code");
+                    windowOptionsType!.GetProperty("Name")?.SetValue(options, name);
                     windowOptionsType.GetProperty("WorkingDirectory")?.SetValue(options, workingDirectory);
                     windowOptionsType.GetProperty("Profile")?.SetValue(options, profile);
                     windowOptionsType.GetProperty("Focus")?.SetValue(options, true);
@@ -175,7 +180,7 @@ internal static class VsTerminalLauncher
                         Log.Warn("Native VS terminal: neither CreateTerminalWindowAsync (18.x) nor a compatible CreateTerminalAsync (17.x) found - falling back to external console.");
                         return false;
                     }
-                    guidResult = await UnwrapAsync(createLegacy.Invoke(terminalService, new object?[] { ct, "Claude Code", profile, workingDirectory }));
+                    guidResult = await UnwrapAsync(createLegacy.Invoke(terminalService, new object?[] { ct, name, profile, workingDirectory }));
                     surface = "17.x legacy surface";
 
                     // The old surface has no Focus option; ShowAsync is its bring-to-front. Best-effort.
@@ -200,6 +205,11 @@ internal static class VsTerminalLauncher
                 // Remember the tab so the context actions can refocus it (ShowAsync) after they push
                 // an @ reference - otherwise Enter goes to the editor, not the composer (the #33 trap).
                 _lastTerminal = terminalGuid;
+                // ITerminalService has no rename, so find the tab's window frame (the tool frame that wasn't
+                // there before the call) - its caption is what the Sessions card retitles later.
+                _lastFrame = await FindNewToolFrameAsync(framesBefore, ct);
+                if (_lastFrame == null)
+                    Log.Event("Native VS terminal: couldn't identify the new tab's window frame - its caption won't follow the session title.");
                 Log.Info($"Launched Claude Code in VS's native Terminal window ({surface}, port {ssePort}, cwd '{workingDirectory ?? "(default)"}').");
                 return true;
             }
@@ -239,15 +249,81 @@ internal static class VsTerminalLauncher
     /// <summary>The docked claude tab from the most recent native launch (Guid.Empty = none this session).</summary>
     private static Guid _lastTerminal;
 
+    /// <summary>The tab created by the most recent successful native launch (read right after TryLaunchAsync).</summary>
+    public static Guid LastTerminal => _lastTerminal;
+
+    private static IVsWindowFrame? _lastFrame;
+
+    /// <summary>The window frame hosting that tab, or null when it couldn't be identified.</summary>
+    public static IVsWindowFrame? LastFrame => _lastFrame;
+
+    private const int CaptionMax = 40;
+
+    /// <summary>
+    /// The tab marker: a filled heavy asterisk, Claude's spark. A tab caption is plain text (no color, no
+    /// inline image), and the frame icon only renders in some tab layouts - so a glyph is what reliably shows.
+    /// </summary>
+    private const string Marker = "✱ ";
+
+    private static string CaptionOf(string title)
+    {
+        title = title.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (title.Length > CaptionMax) title = title.Substring(0, CaptionMax - 1) + "…";
+        return Marker + title;
+    }
+
+    /// <summary>Retitle a terminal tab. UI thread. False when the frame is gone (tab closed).</summary>
+    public static bool TrySetCaption(IVsWindowFrame frame, string title)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return ErrorHandler.Succeeded(frame.SetProperty((int)__VSFPROPID.VSFPROPID_Caption, CaptionOf(title)));
+        }
+        catch { return false; }
+    }
+
+    private static HashSet<object> SnapshotToolFrames()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var set = new HashSet<object>(); // RCWs of one COM object are one .NET object, so default equality is identity
+        try
+        {
+            if (Package.GetGlobalService(typeof(SVsUIShell)) is not IVsUIShell shell) return set;
+            if (!ErrorHandler.Succeeded(shell.GetToolWindowEnum(out var frames)) || frames == null) return set;
+            var one = new IVsWindowFrame[1];
+            while (frames.Next(1, one, out uint fetched) == VSConstants.S_OK && fetched == 1)
+                if (one[0] != null) set.Add(one[0]);
+        }
+        catch { /* best-effort: no snapshot = no retitling */ }
+        return set;
+    }
+
+    /// <summary>The tool frame that appeared since <paramref name="before"/>; polls briefly since the terminal
+    /// may materialize its window a moment after CreateTerminalWindowAsync returns. Null if not exactly one.</summary>
+    private static async Task<IVsWindowFrame?> FindNewToolFrameAsync(HashSet<object> before, CancellationToken ct)
+    {
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
+            var added = SnapshotToolFrames().Where(f => !before.Contains(f)).OfType<IVsWindowFrame>().ToList();
+            if (added.Count == 1) return added[0];
+            if (added.Count > 1) return null; // ambiguous - rather no retitle than the wrong window's
+            await Task.Delay(200, ct);
+        }
+        return null;
+    }
+
     /// <summary>
     /// Bring the docked claude terminal to the front WITH keyboard focus, so Enter sends what a
     /// context action just pushed into the composer. Best-effort: false when no native tab was
     /// launched this session (external console, /ide-connected terminal, restored tab) or the
     /// service/ShowAsync isn't reachable - callers fall back or no-op, never error.
     /// </summary>
-    public static async Task<bool> TryFocusAsync(CancellationToken ct)
+    public static async Task<bool> TryFocusAsync(CancellationToken ct, Guid? terminal = null)
     {
-        if (_lastTerminal == Guid.Empty) return false;
+        var target = terminal ?? _lastTerminal;
+        if (target == Guid.Empty) return false;
         try
         {
             var terminalServiceType = FindType("Microsoft.VisualStudio.Terminal.ITerminalService");
@@ -268,7 +344,7 @@ internal static class VsTerminalLauncher
                 var show = PickMethod(terminalServiceType, "ShowAsync",
                     m => m.GetParameters().Length == 2 && m.GetParameters()[0].ParameterType == typeof(Guid));
                 if (show == null) return false;
-                await UnwrapAsync(show.Invoke(svc, new object?[] { _lastTerminal, ct }));
+                await UnwrapAsync(show.Invoke(svc, new object?[] { target, ct }));
                 return true;
             }
             finally

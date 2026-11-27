@@ -1,14 +1,17 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using ClaudeCodeVs.Protocol;
+using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeCodeVs.Ui;
@@ -54,7 +57,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly CheckBox _allowDrive;
     private readonly CheckBox _allowCapture;
     private readonly CheckBox _notify;
-    private readonly ListBox _feed;
+    private readonly RichTextBox _feed;
     private readonly WrapPanel _attachChips;
     private readonly Button _attachClear;
     private readonly TextBlock _attachSummary;
@@ -73,6 +76,11 @@ internal sealed class ClaudeToolWindowControl : UserControl
     private readonly TextBlock _costText;
     private readonly Button _costButton;
     private bool _showCost;
+    private readonly StackPanel _sessionsList;
+    private readonly FrameworkElement _sessionsCard;
+    private readonly Border _tabActivity;
+    private readonly Border _tabSessions;
+    private int _sessionsLoadGen; // a slow listing must not overwrite a newer one
 
     public ClaudeToolWindowControl()
     {
@@ -82,7 +90,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         FontScale.BindRoot(this);
 
         var root = new Grid { Margin = new Thickness(10, 8, 10, 8) };
-        for (int i = 0; i < 9; i++)
+        for (int i = 0; i < 8; i++)
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // feed
 
@@ -111,7 +119,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         var launchExternal = MakeButton(Strings.BtnExternalConsole, () => { _ = BridgeStatus.LaunchExternalAction?.Invoke(); });
         launchExternal.ToolTip = Strings.TipExternalConsole;
         toolbar.Children.Add(launchExternal);
-        toolbar.Children.Add(MakeButton(Strings.BtnClear, () => _feed!.Items.Clear()));
+        toolbar.Children.Add(MakeButton(Strings.BtnClear, () => ClearFeed()));
         toolbar.Children.Add(MakeButton(Strings.BtnOutput, () => { try { BridgeStatus.ShowOutputAction?.Invoke(); } catch { } }));
 
         // The toggles get their own WRAPPING row: four checkboxes stopped fitting beside the buttons at
@@ -360,21 +368,67 @@ internal sealed class ClaudeToolWindowControl : UserControl
         // Ctrl+V anywhere in the panel = the Paste image button.
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, (s, e) => PasteFromClipboard()));
 
-        // ---- Row 8: feed label ----
-        var feedLabel = Font(new TextBlock { Text = Strings.FeedLabel, FontWeight = FontWeights.SemiBold, Opacity = 0.55, Margin = new Thickness(2, 0, 0, 4) }, 0.83);
-        Grid.SetRow(feedLabel, 8);
-
-        // ---- Row 9: curated activity feed ----
-        _feed = new ListBox
+        // ---- Row 8: sessions (past CLI sessions of this workspace; double-click = resume) ----
+        // The CLI owns the session store (~/.claude/projects/...); we only list it and launch
+        // `claude --resume <id>` / `--continue` in a new terminal. Collapsed by default: zero panel height
+        // until the user wants it.
+        var sessionsBar = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+        sessionsBar.Children.Add(MakeButton(Strings.BtnSessionsNew, () => { _ = BridgeStatus.LaunchSessionAction?.Invoke(""); }));
+        sessionsBar.Children.Add(MakeButton(Strings.BtnSessionsRefresh, RefreshSessions));
+        _sessionsList = new StackPanel();
+        var sessionsScroll = new ScrollViewer
         {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = _sessionsList,
+        };
+        var sessionsPane = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(sessionsBar, Dock.Top);
+        sessionsPane.Children.Add(sessionsBar);
+        sessionsPane.Children.Add(sessionsScroll);
+
+        // ---- Row 8: tabs - Activity (curated feed) and Sessions share the one stretchy row ----
+        // A read-only RichTextBox, not a ListBox: lines soft-wrap to the panel width and the text can be
+        // selected across lines and copied (Ctrl+C / context menu), which a list of TextBlocks can't do.
+        // One Paragraph per line keeps the per-level colors.
+        _feed = Font(new RichTextBox
+        {
+            IsReadOnly = true,
+            IsReadOnlyCaretVisible = false,
             BorderThickness = new Thickness(1),
             BorderBrush = Divider,
             Background = Brushes.Transparent,
-            ItemContainerStyle = FlatItemStyle(),
-        };
-        ScrollViewer.SetHorizontalScrollBarVisibility(_feed, ScrollBarVisibility.Auto);
+            FontFamily = Mono,
+            Padding = new Thickness(2),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Document = new FlowDocument { PagePadding = new Thickness(0) },
+        }, 0.96);
         _feed.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
-        Grid.SetRow(_feed, 9);
+        var feedMenu = MakeThemedMenu();
+        var copyItem = new MenuItem { Header = Strings.FeedMenuCopy, Command = ApplicationCommands.Copy, CommandTarget = _feed };
+        var selectAllItem = new MenuItem { Header = Strings.FeedMenuSelectAll, Command = ApplicationCommands.SelectAll, CommandTarget = _feed };
+        feedMenu.Items.Add(copyItem);
+        feedMenu.Items.Add(selectAllItem);
+        _feed.ContextMenu = feedMenu;
+
+        // Hand-rolled tab strip rather than TabControl: the stock one ignores the VS theme in a tool
+        // window; this is two themed headers with an accent underline, like the Output window's tabs.
+        _tabActivity = MakeTabHeader(Strings.FeedLabel, () => SelectTab(sessions: false));
+        _tabSessions = MakeTabHeader(Strings.SessionsHeader, () => SelectTab(sessions: true));
+        var tabStrip = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        tabStrip.Children.Add(_tabActivity);
+        tabStrip.Children.Add(_tabSessions);
+
+        _sessionsCard = sessionsPane;
+        var tabBody = new Grid();
+        tabBody.Children.Add(_feed);
+        tabBody.Children.Add(sessionsPane);
+        var tabHost = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(tabStrip, Dock.Top);
+        tabHost.Children.Add(tabStrip);
+        tabHost.Children.Add(tabBody);
+        Grid.SetRow(tabHost, 8);
+        SelectTab(sessions: false);
 
         root.Children.Add(header);
         root.Children.Add(toolbarStack);
@@ -384,8 +438,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         root.Children.Add(_pendingCard);
         root.Children.Add(_editsCard);
         root.Children.Add(attachCard);
-        root.Children.Add(feedLabel);
-        root.Children.Add(_feed);
+        root.Children.Add(tabHost);
         Content = root;
 
         // 1s tick keeps the "connected for N" readout live without an event per second.
@@ -410,12 +463,14 @@ internal sealed class ClaudeToolWindowControl : UserControl
         BridgeStatus.Changed += OnChanged;
         Activity.AgentActivity.Changed += OnChanged;
         Attachments.AttachmentService.Changed += OnAttachmentsChanged;
+        BridgeStatus.SessionsChanged += OnSessionsChanged;
         // Re-sync from current state (we may have missed events while hidden).
-        _feed.Items.Clear();
+        ClearFeed();
         foreach (var entry in BridgeStatus.LogSnapshot())
             AddFeedLine(entry.Level, entry.Text);
         UpdateStatus();
         RefreshAttachments();
+        if (_sessionsCard.Visibility == Visibility.Visible) RefreshSessions();
         _timer.Start();
     }
 
@@ -427,6 +482,7 @@ internal sealed class ClaudeToolWindowControl : UserControl
         BridgeStatus.Changed -= OnChanged;
         Activity.AgentActivity.Changed -= OnChanged;
         Attachments.AttachmentService.Changed -= OnAttachmentsChanged;
+        BridgeStatus.SessionsChanged -= OnSessionsChanged;
         _timer.Stop();
     }
 
@@ -438,6 +494,12 @@ internal sealed class ClaudeToolWindowControl : UserControl
 
     private void OnChanged() => _ = Dispatcher.BeginInvoke(new Action(UpdateStatus));
 
+    // Only re-list while the Sessions tab is showing; selecting the tab lists afresh anyway.
+    private void OnSessionsChanged() => _ = Dispatcher.BeginInvoke(new Action(() =>
+    {
+        if (_sessionsCard.Visibility == Visibility.Visible) RefreshSessions();
+    }));
+
     private void OnAttachmentsChanged() => _ = Dispatcher.BeginInvoke(new Action(RefreshAttachments));
 #pragma warning restore VSTHRD001
 
@@ -446,15 +508,19 @@ internal sealed class ClaudeToolWindowControl : UserControl
         // Raw JSON frames and notification noise stay in the Output pane; keep the panel readable.
         if (level == LogLevel.Frame || level == LogLevel.Event) return;
 
-        var tb = Font(new TextBlock { Text = text, FontFamily = Mono, TextWrapping = TextWrapping.NoWrap }, 0.96);
-        if (level == LogLevel.Error) tb.Foreground = ErrText;
-        else if (level == LogLevel.Warn) tb.Foreground = WarnText;
-        else tb.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var p = new Paragraph(new Run(text)) { Margin = new Thickness(0) };
+        if (level == LogLevel.Error) p.Foreground = ErrText;
+        else if (level == LogLevel.Warn) p.Foreground = WarnText;
+        // Info lines inherit the RichTextBox's themed foreground.
 
-        _feed.Items.Add(tb);
-        while (_feed.Items.Count > 400) _feed.Items.RemoveAt(0);
-        _feed.ScrollIntoView(tb);
+        var blocks = _feed.Document.Blocks;
+        blocks.Add(p);
+        while (blocks.Count > 400) blocks.Remove(blocks.FirstBlock);
+        // Follow the tail, except while the user has text selected (they're about to copy it).
+        if (_feed.Selection.IsEmpty) _feed.ScrollToEnd();
     }
+
+    private void ClearFeed() => _feed.Document.Blocks.Clear();
 
     private void UpdateStatus()
     {
@@ -714,6 +780,242 @@ internal sealed class ClaudeToolWindowControl : UserControl
     /// the file at the change through the same Navigator the openFile tool uses. Hidden entirely when
     /// there is nothing to show, so it costs no panel height in the common case.
     /// </summary>
+    /// <summary>List the workspace's saved sessions off-thread (files can be large; titles are cached by
+    /// size+mtime), then render on the dispatcher. Marks the session the hooks last reported as active.</summary>
+    private void RefreshSessions()
+    {
+        int gen = ++_sessionsLoadGen;
+        string? workspace = BridgeStatus.Workspace;
+        string? activeId = Sessions.SessionStore.IdFromTranscriptPath(Activity.TranscriptTail.CurrentPath);
+        _ = Task.Run(() =>
+        {
+            Sessions.ExternalSessions.Scan(); // so the Delete item knows about sessions other CLIs hold
+            var list = Sessions.SessionStore.List(workspace);
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (gen != _sessionsLoadGen) return;
+                RenderSessions(list, activeId);
+            }));
+        });
+    }
+
+    private void RenderSessions(System.Collections.Generic.List<Sessions.SessionInfo> list, string? activeId)
+    {
+        _sessionsList.Children.Clear();
+
+        if (list.Count == 0)
+        {
+            _sessionsList.Children.Add(Font(new TextBlock { Text = Strings.SessionsEmpty, Opacity = 0.6, Margin = new Thickness(2, 2, 0, 2) }, 0.92));
+            return;
+        }
+
+        foreach (var s in list)
+            _sessionsList.Children.Add(BuildSessionRow(s, activeId));
+    }
+
+    private UIElement BuildSessionRow(Sessions.SessionInfo s, string? activeId)
+    {
+        {
+            var session = s; // capture per row
+            bool active = string.Equals(session.Id, activeId, StringComparison.OrdinalIgnoreCase);
+            var title = Font(new TextBlock
+            {
+                Text = (active ? "● " : "") + session.Title,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal,
+            }, 0.96);
+            var when = Font(new TextBlock
+            {
+                Text = session.LastWriteLocal.ToString("g") + (active ? "  ·  " + Strings.SessionActive : ""),
+                Opacity = 0.55,
+            }, 0.83);
+            var stack = new StackPanel();
+            stack.Children.Add(title);
+            stack.Children.Add(when);
+            var row = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(4, 2, 4, 2),
+                Cursor = Cursors.Hand,
+                ToolTip = Strings.TipSessionResume,
+                Child = stack,
+            };
+            row.MouseEnter += (a, b) => row.Background = ChipHover;
+            row.MouseLeave += (a, b) => row.Background = Brushes.Transparent;
+            row.MouseLeftButtonDown += (a, b) =>
+            {
+                if (b.ClickCount >= 2) ResumeSession(session);
+            };
+
+            // Right-click menu. Switch is also the double-click; Rename writes the same record the CLI's
+            // /rename and the VS Code extension do, so the new name shows up everywhere.
+            var menu = MakeThemedMenu();
+            var cont = new MenuItem { Header = Strings.SessionMenuSwitch };
+            cont.Click += (a, b) => ResumeSession(session);
+            menu.Items.Add(cont);
+
+            var rename = new MenuItem { Header = Strings.SessionMenuRename };
+            rename.Click += (a, b) => RenameSession(session);
+            menu.Items.Add(rename);
+
+            var delete = new MenuItem { Header = Strings.SessionMenuDelete };
+            delete.Click += (a, b) => DeleteSession(session);
+            ToolTipService.SetShowOnDisabled(delete, true);
+            menu.Items.Add(delete);
+            // An open session can't be deleted (its CLI would recreate the transcript): grey the item out,
+            // evaluated each time the menu opens since sessions open and close while the list sits there.
+            // "Open" = known to our window registry OR held by any running CLI (VS Code, another terminal):
+            // deleting a session another client holds doesn't stick - it re-writes a stub on exit.
+            void ApplyOpenState()
+            {
+                bool open = Sessions.SessionWindows.Check(session.Id) != Sessions.SessionWindows.Presence.NotOpen
+                            || Sessions.ExternalSessions.IsOpen(session.Id);
+                delete.IsEnabled = !open;
+                delete.ToolTip = open ? Strings.SessionDeleteOpen : null;
+            }
+            menu.Opened += (a, b) =>
+            {
+                ApplyOpenState(); // instant, from the last process scan
+                _ = Task.Run(() =>
+                {
+                    Sessions.ExternalSessions.Scan(); // then refresh it while the menu is up
+                    _ = Dispatcher.BeginInvoke(new Action(() => { if (menu.IsOpen) ApplyOpenState(); }));
+                });
+            };
+            row.ContextMenu = menu;
+
+            return row;
+        }
+    }
+
+    private void RenameSession(Sessions.SessionInfo session)
+    {
+        var name = RenameDialog.Prompt(session.Title);
+        if (name == null) return;
+        string? workspace = BridgeStatus.Workspace;
+        _ = Task.Run(() =>
+        {
+            Sessions.SessionStore.Rename(workspace, session.Id, name);
+            BridgeStatus.RaiseSessionsChanged(); // re-lists here and retitles the session's terminal tab
+        });
+    }
+
+    private void DeleteSession(Sessions.SessionInfo session)
+    {
+        // The menu item is disabled for open sessions; re-check in case it opened while the menu was up.
+        if (Sessions.SessionWindows.Check(session.Id) != Sessions.SessionWindows.Presence.NotOpen) return;
+
+        int answer = VsShellUtilities.ShowMessageBox(ServiceProvider.GlobalProvider,
+            string.Format(Strings.SessionDeleteConfirmFormat, session.Title), Strings.SessionDeleteTitle,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGICON.OLEMSGICON_QUERY,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGBUTTON.OLEMSGBUTTON_OKCANCEL,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND);
+        if (answer != 1 /* IDOK */) return;
+
+        _ = Task.Run(() =>
+        {
+            // Last check right before deleting: a CLI may have resumed it while the dialog was up.
+            if (Sessions.ExternalSessions.Scan().Contains(session.Id))
+                Protocol.Log.Warn($"sessions: not deleting {session.Id} - a running claude process has it open");
+            else
+                Sessions.SessionStore.Delete(session.Id);
+            _ = Dispatcher.BeginInvoke(new Action(RefreshSessions));
+        });
+    }
+
+    /// <summary>
+    /// A context menu skinned with VS's command-bar theme brushes (the stock WPF menu is light Aero chrome
+    /// in a dark IDE). Templates are built in code to match the rest of the panel; the items' template
+    /// lives in the menu's own resources so every MenuItem added later picks it up.
+    /// </summary>
+    private static ContextMenu MakeThemedMenu()
+    {
+
+        // Menu frame
+        var frame = new System.Windows.FrameworkElementFactory(typeof(Border));
+        frame.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarMenuBackgroundGradientBrushKey);
+        frame.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.CommandBarMenuBorderBrushKey);
+        frame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        frame.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+        frame.SetValue(Border.PaddingProperty, new Thickness(3));
+        var items = new System.Windows.FrameworkElementFactory(typeof(StackPanel));
+        items.SetValue(Panel.IsItemsHostProperty, true);
+        frame.AppendChild(items);
+        var menuStyle = new Style(typeof(ContextMenu));
+        menuStyle.Setters.Add(new Setter(TemplateProperty, new ControlTemplate(typeof(ContextMenu)) { VisualTree = frame }));
+
+        // Menu item
+        var itemBorder = new System.Windows.FrameworkElementFactory(typeof(Border)) { Name = "bd" };
+        itemBorder.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        itemBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        itemBorder.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+        itemBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        itemBorder.SetValue(Border.PaddingProperty, new Thickness(12, 5, 24, 5));
+        var content = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter)) { Name = "txt" };
+        content.SetValue(ContentPresenter.ContentSourceProperty, "Header");
+        content.SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+        itemBorder.AppendChild(content);
+        var itemTemplate = new ControlTemplate(typeof(MenuItem)) { VisualTree = itemBorder };
+        var hot = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
+        hot.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverBrushKey), "bd"));
+        hot.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverBorderBrushKey), "bd"));
+        hot.Setters.Add(new Setter(TextElement.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverTextBrushKey), "txt"));
+        itemTemplate.Triggers.Add(hot);
+        // Added after "hot" so it wins: a disabled item is dimmed and never highlights.
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(OpacityProperty, 0.45, "txt"));
+        disabled.Setters.Add(new Setter(Border.BackgroundProperty, Brushes.Transparent, "bd"));
+        disabled.Setters.Add(new Setter(Border.BorderBrushProperty, Brushes.Transparent, "bd"));
+        itemTemplate.Triggers.Add(disabled);
+        var itemStyle = new Style(typeof(MenuItem));
+        itemStyle.Setters.Add(new Setter(TemplateProperty, itemTemplate));
+        itemStyle.Setters.Add(new Setter(FocusVisualStyleProperty, null));
+
+        var menu = new ContextMenu { Style = menuStyle };
+        menu.Resources.Add(typeof(MenuItem), itemStyle);
+        return menu;
+    }
+
+    private static void ResumeSession(Sessions.SessionInfo session)
+    {
+        // The id becomes a command-line argument: accept only the CLI's own id alphabet.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(session.Id, "^[A-Za-z0-9-]+$")) return;
+        _ = BridgeStatus.SwitchSessionAction?.Invoke(session.Id);
+    }
+
+    private void SelectTab(bool sessions)
+    {
+        _feed.Visibility = sessions ? Visibility.Collapsed : Visibility.Visible;
+        _sessionsCard.Visibility = sessions ? Visibility.Visible : Visibility.Collapsed;
+        SetTabSelected(_tabActivity, !sessions);
+        SetTabSelected(_tabSessions, sessions);
+        if (sessions && _wired) RefreshSessions();
+    }
+
+    private static void SetTabSelected(Border tab, bool selected)
+    {
+        tab.BorderThickness = new Thickness(0, 0, 0, 2);
+        tab.Opacity = selected ? 1.0 : 0.6;
+        if (selected) tab.SetResourceReference(Border.BorderBrushProperty, VsBrushes.ControlLinkTextKey);
+        else tab.BorderBrush = Brushes.Transparent;
+    }
+
+    private static Border MakeTabHeader(string text, Action onClick)
+    {
+        var label = Font(new TextBlock { Text = text.ToUpperInvariant(), FontWeight = FontWeights.SemiBold }, 0.96);
+        label.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        var tab = new Border
+        {
+            Background = Brushes.Transparent,
+            Padding = new Thickness(8, 3, 8, 3),
+            Margin = new Thickness(0, 0, 4, 0),
+            Cursor = Cursors.Hand,
+            Child = label,
+        };
+        tab.MouseLeftButtonUp += (s, e) => onClick();
+        return tab;
+    }
+
     private void RefreshEdits()
     {
         var edits = BridgeStatus.TurnEdits;
@@ -995,23 +1297,32 @@ internal sealed class ClaudeToolWindowControl : UserControl
         return style;
     }
 
-    /// <summary>A flat, theme-aware button: a rounded chip that lightens on hover, themed text.</summary>
+    /// <summary>
+    /// A VS-themed button: the shell's own button brushes (face / border / hover / pressed / disabled,
+    /// so it follows every theme incl. high contrast), a 1px border, and real hover/pressed/focus states.
+    /// The state brushes are set by template triggers on the named border - NOT on the button itself:
+    /// a local Background on the Button outranks any trigger, which is why the old chip never reacted.
+    /// </summary>
     private static Button MakeButton(string text, Action onClick)
     {
         var b = Font(new Button
         {
             Content = text,
             Margin = new Thickness(0, 0, 6, 0),
-            Padding = new Thickness(10, 3, 10, 3),
+            Padding = new Thickness(12, 3, 12, 3),
+            MinHeight = 24,
             Cursor = Cursors.Hand,
-            Background = Chip,
-            BorderThickness = new Thickness(0),
+            BorderThickness = new Thickness(1),
+            FocusVisualStyle = null,
         }, 1.0);
-        b.SetResourceReference(ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        b.SetResourceReference(BackgroundProperty, CommonControlsColors.ButtonBrushKey);
+        b.SetResourceReference(BorderBrushProperty, CommonControlsColors.ButtonBorderBrushKey);
+        b.SetResourceReference(ForegroundProperty, CommonControlsColors.ButtonTextBrushKey);
 
-        var border = new System.Windows.FrameworkElementFactory(typeof(Border));
-        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        var border = new System.Windows.FrameworkElementFactory(typeof(Border)) { Name = "bd" };
         border.SetBinding(Border.BackgroundProperty, new Binding("Background") { RelativeSource = RelativeSource.TemplatedParent });
+        border.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") { RelativeSource = RelativeSource.TemplatedParent });
+        border.SetBinding(Border.BorderThicknessProperty, new Binding("BorderThickness") { RelativeSource = RelativeSource.TemplatedParent });
         border.SetBinding(Border.PaddingProperty, new Binding("Padding") { RelativeSource = RelativeSource.TemplatedParent });
         var cp = new System.Windows.FrameworkElementFactory(typeof(ContentPresenter));
         cp.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
@@ -1019,13 +1330,25 @@ internal sealed class ClaudeToolWindowControl : UserControl
         border.AppendChild(cp);
 
         var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(BackgroundProperty, ChipHover));
-        template.Triggers.Add(hover);
+        // Later triggers win over earlier ones: hover < keyboard focus < pressed < disabled.
+        template.Triggers.Add(StateTrigger(IsMouseOverProperty, CommonControlsColors.ButtonHoverBrushKey, CommonControlsColors.ButtonBorderHoverBrushKey));
+        template.Triggers.Add(StateTrigger(IsKeyboardFocusedProperty, null, CommonControlsColors.ButtonBorderFocusedBrushKey));
+        template.Triggers.Add(StateTrigger(System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, CommonControlsColors.ButtonPressedBrushKey, CommonControlsColors.ButtonBorderPressedBrushKey));
+        template.Triggers.Add(StateTrigger(IsEnabledProperty, CommonControlsColors.ButtonDisabledBrushKey, CommonControlsColors.ButtonBorderDisabledBrushKey, value: false));
         b.Template = template;
 
         b.Click += (s, e) => { try { onClick(); } catch { } };
         return b;
+    }
+
+    private static Trigger StateTrigger(DependencyProperty prop, object? backgroundKey, object? borderKey, bool value = true)
+    {
+        var t = new Trigger { Property = prop, Value = value };
+        if (backgroundKey != null)
+            t.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(backgroundKey), "bd"));
+        if (borderKey != null)
+            t.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(borderKey), "bd"));
+        return t;
     }
 
     private static Brush Freeze(Color c)

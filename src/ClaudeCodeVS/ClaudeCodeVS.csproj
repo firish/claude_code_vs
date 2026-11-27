@@ -68,6 +68,7 @@
     <Reference Include="System.Xaml" />
     <!-- GDI capture for the vs_capture_* tools (framework assembly, ships nothing). -->
     <Reference Include="System.Drawing" />
+    <Reference Include="System.Management" />
   </ItemGroup>
 
   <ItemGroup>
